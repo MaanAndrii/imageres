@@ -93,19 +93,22 @@ def get_max_box(
     aspect_data: Optional[Tuple[int, int]]
 ) -> Tuple[int, int, int, int]:
     """
-    Calculate maximum crop box for given aspect ratio
+    Calculate maximum crop box for given aspect ratio that fits image bounds
+    
+    ВАЖЛИВО: Повертає координати для PROXY зображення (вже масштабовані)
     
     Args:
-        img_w: Image width
-        img_h: Image height
+        img_w: Proxy image width (after scaling)
+        img_h: Proxy image height (after scaling)
         aspect_data: Aspect ratio tuple (w, h) or None
         
     Returns:
-        Crop box tuple (left, top, width, height)
+        Crop box tuple (left, top, width, height) for PROXY coordinates
     """
     try:
         if aspect_data is None:
-            pad = 10
+            # Free aspect - максимальна область з невеликим відступом
+            pad = 5
             return (
                 pad,
                 pad,
@@ -121,22 +124,31 @@ def get_max_box(
         
         ratio_val = ratio_w / ratio_h
         
-        # Try to fit by width
+        # Спочатку пробуємо вписати по ширині (використовуємо ВСЮ ширину)
         try_w = img_w
         try_h = int(try_w / ratio_val)
         
         if try_h > img_h:
-            # Doesn't fit, try by height
+            # Не влізло по висоті - вписуємо по висоті (використовуємо ВСЮ висоту)
             try_h = img_h
             try_w = int(try_h * ratio_val)
         
-        # Ensure positive dimensions
+        # Гарантуємо що розміри в межах зображення
         try_w = max(10, min(try_w, img_w))
         try_h = max(10, min(try_h, img_h))
         
-        # Center the box
+        # Центруємо рамку
         left = (img_w - try_w) // 2
         top = (img_h - try_h) // 2
+        
+        # Гарантуємо що координати в межах
+        left = max(0, min(left, img_w - try_w))
+        top = max(0, min(top, img_h - try_h))
+        
+        logger.debug(
+            f"MAX box calculated: {try_w}x{try_h} at ({left}, {top}) "
+            f"for image {img_w}x{img_h}, ratio {ratio_w}:{ratio_h}"
+        )
         
         return (left, top, try_w, try_h)
     
@@ -244,11 +256,31 @@ def open_editor_dialog(fpath: str, T: dict):
                 "MAX ⛶",
                 use_container_width=True,
                 key=f"max_{file_id}",
-                help="Maximize crop area"
+                help="Максимальна область кадрування у вибраному співвідношенні"
             ):
+                # Розраховуємо максимальну рамку для PROXY зображення
                 max_box = get_max_box(proxy_w, proxy_h, aspect_val)
                 st.session_state[f'def_coords_{file_id}'] = max_box
                 st.session_state[f'reset_{file_id}'] += 1
+                
+                # Інформативне повідомлення
+                if aspect_val:
+                    ratio_str = f"{aspect_val[0]}:{aspect_val[1]}"
+                else:
+                    ratio_str = "вільне"
+                
+                # Розрахунок реальних розмірів для показу користувачу
+                real_w = int(max_box[2] * scale_factor)
+                real_h = int(max_box[3] * scale_factor)
+                
+                st.toast(
+                    f"✅ MAX: {real_w}×{real_h}px ({ratio_str})",
+                    icon="⛶"
+                )
+                logger.info(
+                    f"MAX activated: {real_w}x{real_h} ({ratio_str}) "
+                    f"for proxy {proxy_w}x{proxy_h}"
+                )
                 st.rerun()
             
             st.divider()
@@ -267,7 +299,9 @@ def open_editor_dialog(fpath: str, T: dict):
                     should_resize_image=False,
                     default_coords=def_coords,
                     return_type='box',
-                    key=cropper_id
+                    key=cropper_id,
+                    # ВАЖЛИВО: Блокування рамки в межах зображення
+                    box_algorithm="constrained"  # Не дозволяє виходити за межі
                 )
             except Exception as e:
                 st.error(f"Cropper error: {e}")
@@ -281,34 +315,50 @@ def open_editor_dialog(fpath: str, T: dict):
             
             if rect:
                 try:
-                    # Scale coordinates back to original
+                    # ВАЖЛИВО: rect містить координати PROXY зображення
+                    # scale_factor - це співвідношення ОРИГІНАЛ / PROXY
+                    # Тому множимо на scale_factor для отримання координат оригіналу
+                    
                     left = int(rect['left'] * scale_factor)
                     top = int(rect['top'] * scale_factor)
                     width = int(rect['width'] * scale_factor)
                     height = int(rect['height'] * scale_factor)
                     
-                    # Clamp to image bounds
+                    # Clamp до меж ОРИГІНАЛЬНОГО зображення (безпека)
                     orig_w, orig_h = img_full.size
+                    
                     left = max(0, left)
                     top = max(0, top)
                     
+                    # Якщо рамка виходить за межі - обрізаємо розмір
                     if left + width > orig_w:
                         width = orig_w - left
                     if top + height > orig_h:
                         height = orig_h - top
                     
-                    # Ensure positive dimensions
+                    # Гарантуємо позитивні розміри
                     width = max(1, width)
                     height = max(1, height)
                     
+                    # Crop box для PIL (left, top, right, bottom)
                     crop_box = (left, top, left + width, top + height)
                     real_w, real_h = width, height
+                    
+                    logger.debug(
+                        f"Crop calculated: proxy ({rect['left']:.0f}, {rect['top']:.0f}, "
+                        f"{rect['width']:.0f}x{rect['height']:.0f}) → "
+                        f"original ({left}, {top}, {width}x{height})"
+                    )
                 
                 except Exception as e:
                     logger.error(f"Crop calculation failed: {e}")
+                    st.warning(f"⚠️ Помилка розрахунку: {e}")
             
-            # Display dimensions
-            st.info(f"📏 **{real_w} × {real_h}** px")
+            # Display dimensions (оригінальні розміри!)
+            if real_w > 0 and real_h > 0:
+                st.info(f"📏 **{real_w} × {real_h}** px")
+            else:
+                st.info("📏 **Оберіть область**")
             
             # Save button
             if st.button(
