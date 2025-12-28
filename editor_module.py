@@ -315,7 +315,7 @@ def open_editor_dialog(fpath: str, T: dict):
             
             # MAX button
             if st.button(
-                "MAX ⛶",
+                "MAX X",
                 use_container_width=True,
                 key=f"max_{file_id}",
                 help="Максимальна область у вибраному співвідношенні"
@@ -336,7 +336,7 @@ def open_editor_dialog(fpath: str, T: dict):
                 
                 st.toast(
                     f"✅ MAX: {real_w}×{real_h}px ({ratio_str})",
-                    icon="⛶"
+                    icon="X"
                 )
                 logger.info(
                     f"MAX activated: {real_w}x{real_h} ({ratio_str}) "
