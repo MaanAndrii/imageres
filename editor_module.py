@@ -186,6 +186,12 @@ def open_editor_dialog(fpath: str, T: dict):
         if f'crop_box_{file_id}' not in st.session_state:
             st.session_state[f'crop_box_{file_id}'] = None
         
+        if f'history_{file_id}' not in st.session_state:
+            st.session_state[f'history_{file_id}'] = []
+        
+        if f'history_index_{file_id}' not in st.session_state:
+            st.session_state[f'history_index_{file_id}'] = -1
+        
         # Load original image
         try:
             with Image.open(fpath) as img_temp:
@@ -220,14 +226,25 @@ def open_editor_dialog(fpath: str, T: dict):
         with col_controls:
             st.markdown("**🔄 Rotate**")
             
-            # Rotation buttons
-            c1, c2 = st.columns(2)
+            # Rotation buttons with Undo/Redo
+            c1, c2, c3, c4 = st.columns(4)
+            
             with c1:
                 if st.button(
-                    "↺ -90°",
+                    "↺",
                     use_container_width=True,
-                    key=f"rot_left_{file_id}"
+                    key=f"rot_left_{file_id}",
+                    help="Rotate -90°"
                 ):
+                    # Save to history
+                    history = st.session_state[f'history_{file_id}']
+                    history.append({
+                        'type': 'rotate',
+                        'angle': st.session_state[f'rot_{file_id}'],
+                        'crop_box': st.session_state[f'crop_box_{file_id}']
+                    })
+                    st.session_state[f'history_index_{file_id}'] = len(history) - 1
+                    
                     st.session_state[f'rot_{file_id}'] -= 90
                     st.session_state[f'reset_{file_id}'] += 1
                     st.session_state[f'crop_box_{file_id}'] = None
@@ -235,13 +252,59 @@ def open_editor_dialog(fpath: str, T: dict):
             
             with c2:
                 if st.button(
-                    "↻ +90°",
+                    "↻",
                     use_container_width=True,
-                    key=f"rot_right_{file_id}"
+                    key=f"rot_right_{file_id}",
+                    help="Rotate +90°"
                 ):
+                    # Save to history
+                    history = st.session_state[f'history_{file_id}']
+                    history.append({
+                        'type': 'rotate',
+                        'angle': st.session_state[f'rot_{file_id}'],
+                        'crop_box': st.session_state[f'crop_box_{file_id}']
+                    })
+                    st.session_state[f'history_index_{file_id}'] = len(history) - 1
+                    
                     st.session_state[f'rot_{file_id}'] += 90
                     st.session_state[f'reset_{file_id}'] += 1
                     st.session_state[f'crop_box_{file_id}'] = None
+                    st.rerun()
+            
+            with c3:
+                # Undo button
+                history_idx = st.session_state[f'history_index_{file_id}']
+                can_undo = history_idx >= 0
+                if st.button(
+                    "⎌",
+                    use_container_width=True,
+                    key=f"undo_{file_id}",
+                    disabled=not can_undo,
+                    help="Undo"
+                ):
+                    history = st.session_state[f'history_{file_id}']
+                    if history_idx >= 0:
+                        prev_state = history[history_idx]
+                        st.session_state[f'rot_{file_id}'] = prev_state['angle']
+                        st.session_state[f'crop_box_{file_id}'] = prev_state['crop_box']
+                        st.session_state[f'history_index_{file_id}'] -= 1
+                        st.session_state[f'reset_{file_id}'] += 1
+                        st.rerun()
+            
+            with c4:
+                # Reset button
+                if st.button(
+                    "⟲",
+                    use_container_width=True,
+                    key=f"reset_all_{file_id}",
+                    help="Reset all"
+                ):
+                    st.session_state[f'rot_{file_id}'] = 0
+                    st.session_state[f'crop_box_{file_id}'] = None
+                    st.session_state[f'history_{file_id}'] = []
+                    st.session_state[f'history_index_{file_id}'] = -1
+                    st.session_state[f'reset_{file_id}'] += 1
+                    st.toast("Reset completed")
                     st.rerun()
             
             st.divider()
@@ -256,7 +319,18 @@ def open_editor_dialog(fpath: str, T: dict):
             )
             aspect_val = config.ASPECT_RATIOS[aspect_choice]
             
-            # Manual size input
+            # Get current crop box from cropper state
+            current_crop = st.session_state.get(f'crop_box_{file_id}', None)
+            
+            # Calculate current real dimensions
+            if current_crop and isinstance(current_crop, dict):
+                current_real_w = int(current_crop.get('width', 0) * scale_factor)
+                current_real_h = int(current_crop.get('height', 0) * scale_factor)
+            else:
+                current_real_w = img_full.width // 2
+                current_real_h = img_full.height // 2
+            
+            # Manual size input with current values
             st.markdown("**📐 Manual Size (px)**")
             col_w, col_h = st.columns(2)
             
@@ -265,7 +339,7 @@ def open_editor_dialog(fpath: str, T: dict):
                     "Width",
                     min_value=10,
                     max_value=img_full.width,
-                    value=img_full.width // 2,
+                    value=min(current_real_w, img_full.width),
                     step=10,
                     key=f"manual_w_{file_id}",
                     label_visibility="collapsed"
@@ -276,7 +350,7 @@ def open_editor_dialog(fpath: str, T: dict):
                     "Height",
                     min_value=10,
                     max_value=img_full.height,
-                    value=img_full.height // 2,
+                    value=min(current_real_h, img_full.height),
                     step=10,
                     key=f"manual_h_{file_id}",
                     label_visibility="collapsed"
@@ -289,60 +363,72 @@ def open_editor_dialog(fpath: str, T: dict):
                 key=f"apply_manual_{file_id}",
                 help="Set crop box to specified dimensions"
             ):
-                # Scale to proxy coordinates
-                proxy_width = int(manual_width / scale_factor)
-                proxy_height = int(manual_height / scale_factor)
-                
-                # Center the box
-                left = (proxy_w - proxy_width) // 2
-                top = (proxy_h - proxy_height) // 2
-                
-                # Ensure bounds
-                left = max(0, min(left, proxy_w - proxy_width))
-                top = max(0, min(top, proxy_h - proxy_height))
-                
-                st.session_state[f'crop_box_{file_id}'] = {
-                    'left': left,
-                    'top': top,
-                    'width': proxy_width,
-                    'height': proxy_height
-                }
-                st.session_state[f'reset_{file_id}'] += 1
-                st.toast(f"✅ Set: {manual_width}×{manual_height}px", icon="📐")
-                st.rerun()
+                try:
+                    # Scale to proxy coordinates
+                    proxy_width = int(manual_width / scale_factor)
+                    proxy_height = int(manual_height / scale_factor)
+                    
+                    # Validate dimensions
+                    if proxy_width <= 0 or proxy_height <= 0:
+                        st.error("Invalid dimensions")
+                    elif proxy_width > proxy_w or proxy_height > proxy_h:
+                        st.error(f"Dimensions too large. Max: {img_full.width}×{img_full.height}")
+                    else:
+                        # Center the box
+                        left = max(0, (proxy_w - proxy_width) // 2)
+                        top = max(0, (proxy_h - proxy_height) // 2)
+                        
+                        # Ensure it fits
+                        if left + proxy_width > proxy_w:
+                            left = proxy_w - proxy_width
+                        if top + proxy_height > proxy_h:
+                            top = proxy_h - proxy_height
+                        
+                        st.session_state[f'crop_box_{file_id}'] = {
+                            'left': left,
+                            'top': top,
+                            'width': proxy_width,
+                            'height': proxy_height
+                        }
+                        st.session_state[f'reset_{file_id}'] += 1
+                        st.toast(f"Set: {manual_width}x{manual_height}px")
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"Error: {e}")
+                    logger.error(f"Apply manual size failed: {e}")
             
             st.divider()
             
-            # MAX button
+            # MAX button - fix emoji issue
             if st.button(
-                "MAX ⛶",
+                "MAX",
                 use_container_width=True,
                 key=f"max_{file_id}",
                 help="Максимальна область у вибраному співвідношенні"
             ):
-                # Calculate MAX box for PROXY image
-                max_box = calculate_max_crop_box(proxy_w, proxy_h, aspect_val)
-                st.session_state[f'crop_box_{file_id}'] = max_box
-                st.session_state[f'reset_{file_id}'] += 1
-                
-                # Calculate real dimensions for display
-                real_w = int(max_box['width'] * scale_factor)
-                real_h = int(max_box['height'] * scale_factor)
-                
-                if aspect_val:
-                    ratio_str = f"{aspect_val[0]}:{aspect_val[1]}"
-                else:
-                    ratio_str = "free"
-                
-                st.toast(
-                    f"✅ MAX: {real_w}×{real_h}px ({ratio_str})",
-                    icon="⛶"
-                )
-                logger.info(
-                    f"MAX activated: {real_w}x{real_h} ({ratio_str}) "
-                    f"for proxy {proxy_w}x{proxy_h}"
-                )
-                st.rerun()
+                try:
+                    # Calculate MAX box for PROXY image
+                    max_box = calculate_max_crop_box(proxy_w, proxy_h, aspect_val)
+                    
+                    if max_box:
+                        st.session_state[f'crop_box_{file_id}'] = max_box
+                        st.session_state[f'reset_{file_id}'] += 1
+                        
+                        # Calculate real dimensions for display
+                        real_w = int(max_box['width'] * scale_factor)
+                        real_h = int(max_box['height'] * scale_factor)
+                        
+                        if aspect_val:
+                            ratio_str = f"{aspect_val[0]}:{aspect_val[1]}"
+                        else:
+                            ratio_str = "free"
+                        
+                        st.toast(f"MAX: {real_w}x{real_h}px ({ratio_str})")
+                        logger.info(f"MAX activated: {real_w}x{real_h} ({ratio_str})")
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"MAX error: {e}")
+                    logger.error(f"MAX button failed: {e}", exc_info=True)
         
         # === CANVAS ===
         with col_canvas:
@@ -360,9 +446,14 @@ def open_editor_dialog(fpath: str, T: dict):
                     return_type='box',
                     key=cropper_id
                 )
+                
+                # Update crop box in state with current rect
+                if rect and isinstance(rect, dict):
+                    st.session_state[f'crop_box_{file_id}'] = rect
+                
             except Exception as e:
                 st.error(f"Cropper error: {e}")
-                logger.error(f"Cropper failed: {e}")
+                logger.error(f"Cropper failed: {e}", exc_info=True)
                 rect = None
         
         # === CROP INFO & SAVE ===
@@ -449,7 +540,9 @@ def open_editor_dialog(fpath: str, T: dict):
                         keys_to_delete = [
                             f'rot_{file_id}',
                             f'reset_{file_id}',
-                            f'crop_box_{file_id}'
+                            f'crop_box_{file_id}',
+                            f'history_{file_id}',
+                            f'history_index_{file_id}'
                         ]
                         for k in keys_to_delete:
                             if k in st.session_state:
