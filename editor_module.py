@@ -15,6 +15,7 @@ from validators import validate_image_file, validate_dimensions
 
 logger = get_logger(__name__)
 
+
 def get_file_info_str(fpath: str, img: Image.Image) -> str:
     try:
         size_bytes = os.path.getsize(fpath)
@@ -27,7 +28,6 @@ def get_file_info_str(fpath: str, img: Image.Image) -> str:
 
         filename = os.path.basename(fpath)
         return f"📄 **{filename}** • 📏 **{img.width}x{img.height}** • 💾 **{size_str}**"
-
     except Exception as e:
         logger.error(f"Failed to generate file info: {e}")
         return "📄 File info unavailable"
@@ -39,7 +39,6 @@ def create_proxy_image(img: Image.Image, target_width: int = None) -> Tuple[Imag
 
     try:
         w, h = img.size
-
         if w <= target_width:
             return img, 1.0
 
@@ -49,22 +48,26 @@ def create_proxy_image(img: Image.Image, target_width: int = None) -> Tuple[Imag
 
         proxy = img.resize((target_width, new_h), Image.Resampling.LANCZOS)
         scale = w / target_width
-
         return proxy, scale
-
     except Exception as e:
         logger.error(f"Proxy creation failed: {e}")
         return img, 1.0
 
 
-def calculate_max_crop_box(img_w: int, img_h: int, aspect_ratio: Optional[Tuple[int, int]]) -> Dict[str, int]:
+def calculate_max_crop_box(
+    img_w: int,
+    img_h: int,
+    aspect_ratio: Optional[Tuple[int, int]]
+) -> Dict[str, int]:
     try:
         if aspect_ratio is None:
             return {'left': 0, 'top': 0, 'width': img_w, 'height': img_h}
 
         rw, rh = aspect_ratio
-        ratio = rw / rh
+        if rw == 0 or rh == 0:
+            return {'left': 0, 'top': 0, 'width': img_w, 'height': img_h}
 
+        ratio = rw / rh
         crop_w = img_w
         crop_h = int(crop_w / ratio)
 
@@ -78,8 +81,10 @@ def calculate_max_crop_box(img_w: int, img_h: int, aspect_ratio: Optional[Tuple[
         left = (img_w - crop_w) // 2
         top = (img_h - crop_h) // 2
 
-        return {'left': left, 'top': top, 'width': crop_w, 'height': crop_h}
+        left = max(0, min(left, img_w - crop_w))
+        top = max(0, min(top, img_h - crop_h))
 
+        return {'left': left, 'top': top, 'width': crop_w, 'height': crop_h}
     except Exception as e:
         logger.error(f"Max box calculation failed: {e}")
         return {'left': 0, 'top': 0, 'width': img_w, 'height': img_h}
@@ -94,6 +99,8 @@ def open_editor_dialog(fpath: str, T: dict):
         st.session_state.setdefault(f'rot_{file_id}', 0)
         st.session_state.setdefault(f'reset_{file_id}', 0)
         st.session_state.setdefault(f'crop_box_{file_id}', None)
+        st.session_state.setdefault(f'manual_w_{file_id}', None)
+        st.session_state.setdefault(f'manual_h_{file_id}', None)
 
         with Image.open(fpath) as img_temp:
             img_full = ImageOps.exif_transpose(img_temp).convert("RGB")
@@ -104,6 +111,10 @@ def open_editor_dialog(fpath: str, T: dict):
 
         img_proxy, scale_factor = create_proxy_image(img_full)
         proxy_w, proxy_h = img_proxy.size
+
+        if st.session_state[f'manual_w_{file_id}'] is None:
+            st.session_state[f'manual_w_{file_id}'] = img_full.width
+            st.session_state[f'manual_h_{file_id}'] = img_full.height
 
         st.caption(get_file_info_str(fpath, img_full))
 
@@ -129,9 +140,6 @@ def open_editor_dialog(fpath: str, T: dict):
             )
             aspect_val = config.ASPECT_RATIOS[aspect_choice]
 
-            st.session_state.setdefault(f"manual_w_{file_id}", img_full.width)
-            st.session_state.setdefault(f"manual_h_{file_id}", img_full.height)
-
             manual_width = st.number_input(
                 "Width",
                 min_value=10,
@@ -149,11 +157,17 @@ def open_editor_dialog(fpath: str, T: dict):
             )
 
             if st.button("Apply Size", use_container_width=True):
-                pw = max(10, min(int(manual_width / scale_factor), proxy_w))
-                ph = max(10, min(int(manual_height / scale_factor), proxy_h))
+                pw = int(manual_width / scale_factor)
+                ph = int(manual_height / scale_factor)
 
-                left = max(0, (proxy_w - pw) // 2)
-                top = max(0, (proxy_h - ph) // 2)
+                pw = max(10, min(pw, proxy_w))
+                ph = max(10, min(ph, proxy_h))
+
+                left = (proxy_w - pw) // 2
+                top = (proxy_h - ph) // 2
+
+                left = max(0, min(left, proxy_w - pw))
+                top = max(0, min(top, proxy_h - ph))
 
                 st.session_state[f'crop_box_{file_id}'] = {
                     'left': left,
@@ -198,10 +212,19 @@ def open_editor_dialog(fpath: str, T: dict):
             width = int(rect['width'] * scale_factor)
             height = int(rect['height'] * scale_factor)
 
+            orig_w, orig_h = img_full.size
+            left = max(0, min(left, orig_w - 1))
+            top = max(0, min(top, orig_h - 1))
+            width = max(1, min(width, orig_w - left))
+            height = max(1, min(height, orig_h - top))
+
             crop_box = (left, top, left + width, top + height)
             img_full.crop(crop_box).save(fpath, quality=95, subsampling=0, optimize=True)
 
-            st.session_state.clear()
+            for k in list(st.session_state.keys()):
+                if k.endswith(file_id):
+                    del st.session_state[k]
+
             st.toast(T.get('msg_edit_saved', 'Saved'))
             st.rerun()
 
