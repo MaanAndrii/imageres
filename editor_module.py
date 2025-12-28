@@ -76,6 +76,55 @@ def create_proxy_image(
         logger.error(f"Proxy creation failed: {e}")
         return img, 1.0
 
+def calculate_max_crop_dimensions(
+    img_w: int,
+    img_h: int,
+    aspect_ratio: Optional[Tuple[int, int]]
+) -> Tuple[int, int]:
+    """
+    Calculate maximum crop dimensions for given aspect ratio
+    
+    Args:
+        img_w: Image width
+        img_h: Image height
+        aspect_ratio: Aspect ratio tuple (w, h) or None
+        
+    Returns:
+        Tuple of (width, height)
+    """
+    try:
+        if aspect_ratio is None:
+            # Free aspect - use almost full image
+            return img_w - 10, img_h - 10
+        
+        ratio_w, ratio_h = aspect_ratio
+        if ratio_w == 0 or ratio_h == 0:
+            logger.warning(f"Invalid aspect ratio: {aspect_ratio}")
+            return img_w, img_h
+        
+        ratio = ratio_w / ratio_h
+        
+        # Try to fit by width (use FULL width)
+        crop_w = img_w
+        crop_h = int(crop_w / ratio)
+        
+        if crop_h > img_h:
+            # Doesn't fit by width, fit by height (use FULL height)
+            crop_h = img_h
+            crop_w = int(crop_h * ratio)
+        
+        # Ensure within bounds
+        crop_w = max(10, min(crop_w, img_w))
+        crop_h = max(10, min(crop_h, img_h))
+        
+        logger.debug(f"MAX dimensions: {crop_w}x{crop_h} for ratio {ratio_w}:{ratio_h}")
+        
+        return crop_w, crop_h
+    
+    except Exception as e:
+        logger.error(f"Max dimensions calculation failed: {e}")
+        return img_w, img_h
+
 @st.dialog("🛠 Editor", width="large")
 def open_editor_dialog(fpath: str, T: dict):
     """
@@ -163,22 +212,7 @@ def open_editor_dialog(fpath: str, T: dict):
             # MAX button - calculate maximum crop area
             if st.button("⛶ MAX", use_container_width=True, key=f"max_{file_id}"):
                 try:
-                    if aspect_val is None:
-                        # Free aspect - use almost full image
-                        max_w = orig_w - 10
-                        max_h = orig_h - 10
-                    else:
-                        # Calculate max for aspect ratio
-                        ratio = aspect_val[0] / aspect_val[1]
-                        
-                        # Try full width
-                        max_w = orig_w
-                        max_h = int(max_w / ratio)
-                        
-                        if max_h > orig_h:
-                            # Use full height instead
-                            max_h = orig_h
-                            max_w = int(max_h * ratio)
+                    max_w, max_h = calculate_max_crop_dimensions(orig_w, orig_h, aspect_val)
                     
                     # Store for manual input
                     st.session_state[f'manual_w_{file_id}'] = max_w
