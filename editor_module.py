@@ -1,19 +1,310 @@
 """
-Watermarker Pro v7.0 - Editor Module
-=====================================
-Image editing dialog with crop and rotate
+Watermarker Pro v7.0 - Editor Module (streamlit-cropper-fix)
+=============================================================
+Image editing dialog with crop and rotate using fixed cropper
 """
 
 import streamlit as st
 import os
 from typing import Optional, Tuple, Dict
 from PIL import Image, ImageOps
-from streamlit_cropper import st_cropper
+from streamlit_cropper_fix import st_cropper
 import config
 from logger import get_logger
 from validators import validate_image_file, validate_dimensions
 
 logger = get_logger(__name__)
+
+def get_file_info_str(fpath: str, img: Image.Image) -> str:
+    """Generate file info string for display"""
+    try:
+        size_bytes = os.path.getsize(fpath)
+        size_mb = size_bytes / (1024 * 1024)
+        
+        if size_mb >= 1:
+            size_str = f"{size_mb:.2f} MB"
+        else:
+            size_str = f"{size_bytes/1024:.1f} KB"
+        
+        filename = os.path.basename(fpath)
+        return f"📄 **{filename}** &nbsp;•&nbsp; 📏 **{img.width}x{img.height}** &nbsp;•&nbsp; 💾 **{size_str}**"
+    
+    except Exception as e:
+        logger.error(f"Failed to generate file info: {e}")
+        return "📄 File info unavailable"
+
+def create_proxy_image(
+    img: Image.Image,
+    target_width: int = None
+) -> Tuple[Image.Image, float]:
+    """Create proxy (downscaled) image for editor performance"""
+    if target_width is None:
+        target_width = config.PROXY_IMAGE_WIDTH
+    
+    try:
+        w, h = img.size
+        
+        if w <= target_width:
+            return img, 1.0
+        
+        ratio = target_width / w
+        new_h = max(1, int(h * ratio))
+        
+        validate_dimensions(target_width, new_h)
+        
+        proxy = img.resize((target_width, new_h), Image.Resampling.LANCZOS)
+        
+        scale = w / target_width
+        logger.debug(f"Proxy created: {w}x{h} → {target_width}x{new_h} (scale: {scale:.2f})")
+        
+        return proxy, scale
+    
+    except Exception as e:
+        logger.error(f"Proxy creation failed: {e}")
+        return img, 1.0
+
+@st.dialog("🛠 Editor", width="large")
+def open_editor_dialog(fpath: str, T: dict):
+    """
+    Open image editor dialog
+    
+    Args:
+        fpath: Path to image file
+        T: Translation dictionary
+    """
+    try:
+        validate_image_file(fpath)
+        
+        file_id = os.path.basename(fpath)
+        
+        # Initialize state
+        if f'rot_{file_id}' not in st.session_state:
+            st.session_state[f'rot_{file_id}'] = 0
+        
+        if f'reset_{file_id}' not in st.session_state:
+            st.session_state[f'reset_{file_id}'] = 0
+        
+        # Load original image
+        try:
+            with Image.open(fpath) as img_temp:
+                img_full = ImageOps.exif_transpose(img_temp)
+                img_full = img_full.convert('RGB')
+            
+            # Apply rotation if needed
+            angle = st.session_state[f'rot_{file_id}']
+            if angle != 0:
+                img_full = img_full.rotate(-angle, expand=True, resample=Image.BICUBIC)
+        
+        except Exception as e:
+            st.error(f"❌ Error loading image: {e}")
+            logger.error(f"Image load failed: {e}")
+            return
+        
+        # Create proxy for performance
+        img_proxy, scale_factor = create_proxy_image(img_full)
+        proxy_w, proxy_h = img_proxy.size
+        orig_w, orig_h = img_full.size
+        
+        # Display file info
+        st.caption(get_file_info_str(fpath, img_full))
+        
+        # Layout
+        col_canvas, col_controls = st.columns([3, 1], gap="small")
+        
+        # === CONTROLS ===
+        with col_controls:
+            st.markdown("**🔄 Rotate**")
+            
+            # Rotation buttons
+            c1, c2, c3 = st.columns(3)
+            
+            with c1:
+                if st.button("↺ -90°", use_container_width=True, key=f"rot_left_{file_id}"):
+                    st.session_state[f'rot_{file_id}'] -= 90
+                    st.session_state[f'reset_{file_id}'] += 1
+                    st.rerun()
+            
+            with c2:
+                if st.button("↻ +90°", use_container_width=True, key=f"rot_right_{file_id}"):
+                    st.session_state[f'rot_{file_id}'] += 90
+                    st.session_state[f'reset_{file_id}'] += 1
+                    st.rerun()
+            
+            with c3:
+                if st.button("⟲", use_container_width=True, key=f"reset_rot_{file_id}", help="Reset rotation"):
+                    st.session_state[f'rot_{file_id}'] = 0
+                    st.session_state[f'reset_{file_id}'] += 1
+                    st.rerun()
+            
+            st.divider()
+            st.markdown("**✂️ Crop**")
+            
+            # Aspect ratio selection
+            aspect_choice = st.selectbox(
+                T.get('lbl_aspect', 'Aspect Ratio'),
+                list(config.ASPECT_RATIOS.keys()),
+                key=f"asp_{file_id}"
+            )
+            aspect_val = config.ASPECT_RATIOS[aspect_choice]
+            
+            # MAX button - calculate maximum crop area
+            if st.button("⛶ MAX", use_container_width=True, key=f"max_{file_id}"):
+                try:
+                    if aspect_val is None:
+                        # Free aspect - use almost full image
+                        max_w = orig_w - 10
+                        max_h = orig_h - 10
+                    else:
+                        # Calculate max for aspect ratio
+                        ratio = aspect_val[0] / aspect_val[1]
+                        
+                        # Try full width
+                        max_w = orig_w
+                        max_h = int(max_w / ratio)
+                        
+                        if max_h > orig_h:
+                            # Use full height instead
+                            max_h = orig_h
+                            max_w = int(max_h * ratio)
+                    
+                    # Store for manual input
+                    st.session_state[f'manual_w_{file_id}'] = max_w
+                    st.session_state[f'manual_h_{file_id}'] = max_h
+                    
+                    ratio_str = f"{aspect_val[0]}:{aspect_val[1]}" if aspect_val else "free"
+                    st.toast(f"MAX: {max_w}×{max_h}px ({ratio_str})")
+                    st.rerun()
+                    
+                except Exception as e:
+                    st.error(f"MAX error: {e}")
+                    logger.error(f"MAX failed: {e}", exc_info=True)
+            
+            st.divider()
+            st.markdown("**📐 Manual Size**")
+            
+            # Manual dimensions input
+            col_w, col_h = st.columns(2)
+            
+            with col_w:
+                manual_w = st.number_input(
+                    "Width (px)",
+                    min_value=10,
+                    max_value=orig_w,
+                    value=st.session_state.get(f'manual_w_{file_id}', orig_w // 2),
+                    step=10,
+                    key=f"input_w_{file_id}"
+                )
+            
+            with col_h:
+                manual_h = st.number_input(
+                    "Height (px)",
+                    min_value=10,
+                    max_value=orig_h,
+                    value=st.session_state.get(f'manual_h_{file_id}', orig_h // 2),
+                    step=10,
+                    key=f"input_h_{file_id}"
+                )
+            
+            # Update session state
+            st.session_state[f'manual_w_{file_id}'] = manual_w
+            st.session_state[f'manual_h_{file_id}'] = manual_h
+        
+        # === CANVAS ===
+        with col_canvas:
+            try:
+                # Create unique key for cropper
+                cropper_key = f"crop_{file_id}_{st.session_state[f'reset_{file_id}']}"
+                
+                # Use streamlit-cropper-fix
+                rect = st_cropper(
+                    img_proxy,
+                    realtime_update=True,
+                    box_color='#FF0000',
+                    aspect_ratio=aspect_val,
+                    return_type='box',
+                    key=cropper_key
+                )
+                
+            except Exception as e:
+                st.error(f"Cropper error: {e}")
+                logger.error(f"Cropper failed: {e}", exc_info=True)
+                rect = None
+        
+        # === SAVE SECTION ===
+        with col_controls:
+            st.divider()
+            
+            # Calculate crop dimensions from rect or manual input
+            if rect and 'width' in rect and 'height' in rect:
+                # Use cropper rect
+                crop_w = int(rect['width'] * scale_factor)
+                crop_h = int(rect['height'] * scale_factor)
+                crop_left = int(rect['left'] * scale_factor)
+                crop_top = int(rect['top'] * scale_factor)
+                
+                st.info(f"📏 **{crop_w} × {crop_h}** px")
+            else:
+                # Use manual input
+                crop_w = manual_w
+                crop_h = manual_h
+                crop_left = (orig_w - crop_w) // 2
+                crop_top = (orig_h - crop_h) // 2
+                
+                st.info(f"📏 **{crop_w} × {crop_h}** px (manual)")
+            
+            # Clamp to image bounds
+            crop_left = max(0, min(crop_left, orig_w - crop_w))
+            crop_top = max(0, min(crop_top, orig_h - crop_h))
+            crop_w = min(crop_w, orig_w - crop_left)
+            crop_h = min(crop_h, orig_h - crop_top)
+            
+            crop_box = (crop_left, crop_top, crop_left + crop_w, crop_top + crop_h)
+            
+            # Save button
+            if st.button(
+                T.get('btn_save_edit', '💾 Save Changes'),
+                type="primary",
+                use_container_width=True,
+                key=f"save_{file_id}"
+            ):
+                try:
+                    # Crop image
+                    final_image = img_full.crop(crop_box)
+                    
+                    # Save with high quality
+                    final_image.save(fpath, quality=95, subsampling=0, optimize=True)
+                    
+                    # Remove thumbnail cache
+                    thumb_path = f"{fpath}.thumb.jpg"
+                    if os.path.exists(thumb_path):
+                        try:
+                            os.remove(thumb_path)
+                        except:
+                            pass
+                    
+                    # Clean state
+                    keys_to_clean = [
+                        f'rot_{file_id}',
+                        f'reset_{file_id}',
+                        f'manual_w_{file_id}',
+                        f'manual_h_{file_id}'
+                    ]
+                    for k in keys_to_clean:
+                        if k in st.session_state:
+                            del st.session_state[k]
+                    
+                    st.session_state['close_editor'] = True
+                    st.toast(T.get('msg_edit_saved', '✅ Changes saved!'))
+                    logger.info(f"Image edited: {crop_w}×{crop_h} saved to {fpath}")
+                    st.rerun()
+                
+                except Exception as e:
+                    st.error(f"❌ Save failed: {e}")
+                    logger.error(f"Save failed: {e}", exc_info=True)
+    
+    except Exception as e:
+        st.error(f"❌ Editor error: {e}")
+        logger.error(f"Editor failed: {e}", exc_info=True)
 
 def get_file_info_str(fpath: str, img: Image.Image) -> str:
     """
@@ -86,80 +377,6 @@ def create_proxy_image(
     except Exception as e:
         logger.error(f"Proxy creation failed: {e}")
         return img, 1.0
-
-def calculate_max_crop_box(
-    img_w: int,
-    img_h: int,
-    aspect_ratio: Optional[Tuple[int, int]]
-) -> Dict[str, int]:
-    """
-    Calculate maximum crop box for given aspect ratio
-    Returns box in format compatible with st_cropper default_coords
-    
-    Args:
-        img_w: Image width
-        img_h: Image height
-        aspect_ratio: Aspect ratio tuple (w, h) or None
-        
-    Returns:
-        Dict with keys: left, top, width, height
-    """
-    try:
-        if aspect_ratio is None:
-            # Free aspect - максимальна область з відступом
-            pad = 5
-            return {
-                'left': pad,
-                'top': pad,
-                'width': max(10, img_w - 2 * pad),
-                'height': max(10, img_h - 2 * pad)
-            }
-        
-        ratio_w, ratio_h = aspect_ratio
-        if ratio_w == 0 or ratio_h == 0:
-            logger.warning(f"Invalid aspect ratio: {aspect_ratio}")
-            return {'left': 0, 'top': 0, 'width': img_w, 'height': img_h}
-        
-        ratio_val = ratio_w / ratio_h
-        
-        # Спочатку пробуємо вписати по ширині (використати ВСЮ ширину)
-        crop_w = img_w
-        crop_h = int(crop_w / ratio_val)
-        
-        if crop_h > img_h:
-            # Не влізло по висоті - вписуємо по висоті (використати ВСЮ висоту)
-            crop_h = img_h
-            crop_w = int(crop_h * ratio_val)
-        
-        # Гарантуємо що розміри в межах зображення
-        crop_w = max(10, min(crop_w, img_w))
-        crop_h = max(10, min(crop_h, img_h))
-        
-        # Центруємо рамку
-        left = (img_w - crop_w) // 2
-        top = (img_h - crop_h) // 2
-        
-        # Гарантуємо що координати в межах
-        left = max(0, min(left, img_w - crop_w))
-        top = max(0, min(top, img_h - crop_h))
-        
-        result = {
-            'left': left,
-            'top': top,
-            'width': crop_w,
-            'height': crop_h
-        }
-        
-        logger.debug(
-            f"MAX box calculated: {crop_w}x{crop_h} at ({left}, {top}) "
-            f"for image {img_w}x{img_h}, ratio {ratio_w}:{ratio_h}"
-        )
-        
-        return result
-    
-    except Exception as e:
-        logger.error(f"Max box calculation failed: {e}")
-        return {'left': 0, 'top': 0, 'width': img_w, 'height': img_h}
 
 @st.dialog("🛠 Editor", width="large")
 def open_editor_dialog(fpath: str, T: dict):
