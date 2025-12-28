@@ -319,84 +319,6 @@ def open_editor_dialog(fpath: str, T: dict):
             )
             aspect_val = config.ASPECT_RATIOS[aspect_choice]
             
-            # Get current crop box from cropper state
-            current_crop = st.session_state.get(f'crop_box_{file_id}', None)
-            
-            # Calculate current real dimensions
-            if current_crop and isinstance(current_crop, dict):
-                current_real_w = int(current_crop.get('width', 0) * scale_factor)
-                current_real_h = int(current_crop.get('height', 0) * scale_factor)
-            else:
-                current_real_w = img_full.width // 2
-                current_real_h = img_full.height // 2
-            
-            # Manual size input with current values
-            st.markdown("**📐 Manual Size (px)**")
-            col_w, col_h = st.columns(2)
-            
-            with col_w:
-                manual_width = st.number_input(
-                    "Width",
-                    min_value=10,
-                    max_value=img_full.width,
-                    value=min(current_real_w, img_full.width),
-                    step=10,
-                    key=f"manual_w_{file_id}",
-                    label_visibility="collapsed"
-                )
-            
-            with col_h:
-                manual_height = st.number_input(
-                    "Height",
-                    min_value=10,
-                    max_value=img_full.height,
-                    value=min(current_real_h, img_full.height),
-                    step=10,
-                    key=f"manual_h_{file_id}",
-                    label_visibility="collapsed"
-                )
-            
-            # Apply manual size button
-            if st.button(
-                "✓ Apply Size",
-                use_container_width=True,
-                key=f"apply_manual_{file_id}",
-                help="Set crop box to specified dimensions"
-            ):
-                try:
-                    # Scale to proxy coordinates
-                    proxy_width = int(manual_width / scale_factor)
-                    proxy_height = int(manual_height / scale_factor)
-                    
-                    # Validate dimensions
-                    if proxy_width <= 0 or proxy_height <= 0:
-                        st.error("Invalid dimensions")
-                    elif proxy_width > proxy_w or proxy_height > proxy_h:
-                        st.error(f"Dimensions too large. Max: {img_full.width}×{img_full.height}")
-                    else:
-                        # Center the box
-                        left = max(0, (proxy_w - proxy_width) // 2)
-                        top = max(0, (proxy_h - proxy_height) // 2)
-                        
-                        # Ensure it fits
-                        if left + proxy_width > proxy_w:
-                            left = proxy_w - proxy_width
-                        if top + proxy_height > proxy_h:
-                            top = proxy_h - proxy_height
-                        
-                        st.session_state[f'crop_box_{file_id}'] = {
-                            'left': left,
-                            'top': top,
-                            'width': proxy_width,
-                            'height': proxy_height
-                        }
-                        st.session_state[f'reset_{file_id}'] += 1
-                        st.toast(f"Set: {manual_width}x{manual_height}px")
-                        st.rerun()
-                except Exception as e:
-                    st.error(f"Error: {e}")
-                    logger.error(f"Apply manual size failed: {e}")
-            
             st.divider()
             
             # MAX button - fix emoji issue
@@ -447,14 +369,137 @@ def open_editor_dialog(fpath: str, T: dict):
                     key=cropper_id
                 )
                 
-                # Update crop box in state with current rect
-                if rect and isinstance(rect, dict):
-                    st.session_state[f'crop_box_{file_id}'] = rect
-                
             except Exception as e:
                 st.error(f"Cropper error: {e}")
                 logger.error(f"Cropper failed: {e}", exc_info=True)
                 rect = None
+        
+        # === CROP INFO & SAVE ===
+        with col_controls:
+            crop_box = None
+            real_w, real_h = 0, 0
+            
+            if rect:
+                try:
+                    # rect містить координати PROXY зображення
+                    left = int(rect['left'] * scale_factor)
+                    top = int(rect['top'] * scale_factor)
+                    width = int(rect['width'] * scale_factor)
+                    height = int(rect['height'] * scale_factor)
+                    
+                    # Clamp до меж ОРИГІНАЛЬНОГО зображення
+                    orig_w, orig_h = img_full.size
+                    
+                    left = max(0, min(left, orig_w))
+                    top = max(0, min(top, orig_h))
+                    
+                    # Якщо рамка виходить за межі - обрізаємо розмір
+                    if left + width > orig_w:
+                        width = orig_w - left
+                    if top + height > orig_h:
+                        height = orig_h - top
+                    
+                    # Гарантуємо позитивні розміри
+                    width = max(1, width)
+                    height = max(1, height)
+                    
+                    # Crop box для PIL (left, top, right, bottom)
+                    crop_box = (left, top, left + width, top + height)
+                    real_w, real_h = width, height
+                    
+                    logger.debug(
+                        f"Crop calculated: proxy ({rect['left']:.0f}, {rect['top']:.0f}, "
+                        f"{rect['width']:.0f}x{rect['height']:.0f}) → "
+                        f"original ({left}, {top}, {width}x{height})"
+                    )
+                
+                except Exception as e:
+                    logger.error(f"Crop calculation failed: {e}")
+                    st.warning(f"⚠️ Помилка розрахунку: {e}")
+            
+            # Manual size input with current values
+            st.markdown("**📐 Manual Size (px)**")
+            
+            # Use current rect dimensions or defaults
+            if real_w > 0 and real_h > 0:
+                default_w = real_w
+                default_h = real_h
+            else:
+                default_w = min(1000, img_full.width)
+                default_h = min(750, img_full.height)
+            
+            col_w, col_h = st.columns(2)
+            
+            with col_w:
+                manual_width = st.number_input(
+                    "Width",
+                    min_value=10,
+                    max_value=img_full.width,
+                    value=default_w,
+                    step=10,
+                    key=f"manual_w_{file_id}_{st.session_state[f'reset_{file_id}']}",
+                    label_visibility="collapsed"
+                )
+            
+            with col_h:
+                manual_height = st.number_input(
+                    "Height",
+                    min_value=10,
+                    max_value=img_full.height,
+                    value=default_h,
+                    step=10,
+                    key=f"manual_h_{file_id}_{st.session_state[f'reset_{file_id}']}",
+                    label_visibility="collapsed"
+                )
+            
+            # Apply manual size button
+            if st.button(
+                "✓ Apply",
+                use_container_width=True,
+                key=f"apply_manual_{file_id}",
+                help="Set crop box to specified dimensions"
+            ):
+                try:
+                    # Scale to proxy coordinates
+                    proxy_width = int(manual_width / scale_factor)
+                    proxy_height = int(manual_height / scale_factor)
+                    
+                    # Validate dimensions
+                    if proxy_width <= 0 or proxy_height <= 0:
+                        st.error("Invalid dimensions")
+                    elif proxy_width > proxy_w or proxy_height > proxy_h:
+                        st.error(f"Too large. Max: {img_full.width}×{img_full.height}")
+                    else:
+                        # Center the box
+                        left = max(0, (proxy_w - proxy_width) // 2)
+                        top = max(0, (proxy_h - proxy_height) // 2)
+                        
+                        # Ensure it fits
+                        if left + proxy_width > proxy_w:
+                            left = proxy_w - proxy_width
+                        if top + proxy_height > proxy_h:
+                            top = proxy_h - proxy_height
+                        
+                        st.session_state[f'crop_box_{file_id}'] = {
+                            'left': left,
+                            'top': top,
+                            'width': proxy_width,
+                            'height': proxy_height
+                        }
+                        st.session_state[f'reset_{file_id}'] += 1
+                        st.toast(f"Set: {manual_width}x{manual_height}px")
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"Error: {e}")
+                    logger.error(f"Apply manual size failed: {e}", exc_info=True)
+            
+            st.divider()
+            
+            # Display dimensions (оригінальні розміри!)
+            if real_w > 0 and real_h > 0:
+                st.info(f"📏 **{real_w} × {real_h}** px")
+            else:
+                st.info("📏 **Drag to select area**")
         
         # === CROP INFO & SAVE ===
         with col_controls:
