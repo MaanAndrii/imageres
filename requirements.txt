@@ -1,5 +1,5 @@
-streamlit
-Pillow
-translitua
-pandas
-streamlit_cropper_fix
+streamlit>=1.28.0
+Pillow>=10.0.0
+translitua>=1.3.0
+pandas>=2.0.0
+streamlit-cropper-fix>=0.2.2
