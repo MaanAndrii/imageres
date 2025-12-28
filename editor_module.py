@@ -21,31 +21,41 @@ def create_proxy_image(img: Image.Image, target_width: int = 700):
     w, h = img.size
     if w <= target_width:
         return img, 1.0
-    
     ratio = target_width / w
     new_h = max(1, int(h * ratio))
     proxy = img.resize((target_width, new_h), Image.Resampling.LANCZOS)
     return proxy, w / target_width
 
 def calculate_max_crop_box(proxy_w: int, proxy_h: int, aspect_ratio: tuple) -> tuple:
+    """Розрахунок максимальної рамки. Повертає tuple (left, top, width, height)."""
     pad = 10
+    
+    # Якщо пропорції не задані (Free mode)
     if not aspect_ratio:
         safe_w = max(10, proxy_w - 2*pad)
         safe_h = max(10, proxy_h - 2*pad)
         return (pad, pad, safe_w, safe_h)
     
-    target_ratio = aspect_ratio[0] / aspect_ratio[1]
+    # Якщо пропорції задані (наприклад, 16:9)
+    # aspect_ratio[0] - це ширина пропорції (16)
+    # aspect_ratio[1] - це висота пропорції (9)
+    target_ratio = float(aspect_ratio[0]) / float(aspect_ratio[1])
     
+    # 1. Пробуємо вписати рамку по ширині проксі-картинки
     box_w = proxy_w
     box_h = int(box_w / target_ratio)
     
+    # 2. Якщо висота рамки вийшла більшою за висоту картинки, 
+    #    значить вписувати треба по висоті
     if box_h > proxy_h:
         box_h = proxy_h
         box_w = int(box_h * target_ratio)
         
+    # Центруємо рамку
     left = int((proxy_w - box_w) / 2)
     top = int((proxy_h - box_h) / 2)
     
+    # Повертаємо цілі числа, гарантуємо що > 0
     return (
         max(0, left),
         max(0, top),
@@ -57,13 +67,19 @@ def calculate_max_crop_box(proxy_w: int, proxy_h: int, aspect_ratio: tuple) -> t
 def open_editor_dialog(fpath: str, T: dict):
     file_id = os.path.basename(fpath)
     
+    # --- SESSION KEYS ---
+    # Ключі для віджетів
+    key_rot = f'rot_{file_id}'
+    key_reset = f'reset_{file_id}'
+    key_def_box = f'default_box_{file_id}'
+    key_aspect = f"asp_{file_id}"
+    key_input_w = f"in_w_{file_id}"
+    key_input_h = f"in_h_{file_id}"
+
     # --- STATE INIT ---
-    if f'rot_{file_id}' not in st.session_state: 
-        st.session_state[f'rot_{file_id}'] = 0
-    if f'reset_{file_id}' not in st.session_state: 
-        st.session_state[f'reset_{file_id}'] = 0
-    if f'default_box_{file_id}' not in st.session_state: 
-        st.session_state[f'default_box_{file_id}'] = None
+    if key_rot not in st.session_state: st.session_state[key_rot] = 0
+    if key_reset not in st.session_state: st.session_state[key_reset] = 0
+    if key_def_box not in st.session_state: st.session_state[key_def_box] = None
 
     # --- LOAD IMAGE ---
     try:
@@ -72,19 +88,63 @@ def open_editor_dialog(fpath: str, T: dict):
         img_original = ImageOps.exif_transpose(img_original)
         img_original = img_original.convert('RGB')
         
-        angle = st.session_state[f'rot_{file_id}']
+        angle = st.session_state[key_rot]
         if angle != 0:
             img_original = img_original.rotate(-angle, expand=True)
             
         img_proxy, scale_factor = create_proxy_image(img_original)
         proxy_w, proxy_h = img_proxy.size
         orig_w, orig_h = img_original.size
-
     except Exception as e:
-        st.error(f"Помилка завантаження: {e}")
+        st.error(f"Помилка: {e}")
         return
 
     st.caption(get_file_info_str(fpath, img_original))
+
+    # --- CALLBACKS ---
+    # Ці функції виконаються ДО перемальовки екрану, тому помилки не буде
+    
+    def apply_size_action():
+        """Дія для кнопки 'Застосувати розмір'"""
+        # 1. Примусово ставимо 'Free' режим
+        st.session_state[key_aspect] = "Free / Вільний"
+        
+        # 2. Читаємо значення з полів вводу
+        inp_w = st.session_state[key_input_w]
+        inp_h = st.session_state[key_input_h]
+        
+        # 3. Переводимо в Proxy координати
+        target_w_p = int(inp_w / scale_factor)
+        target_h_p = int(inp_h / scale_factor)
+        
+        # 4. Центруємо
+        nl = int((proxy_w - target_w_p) / 2)
+        nt = int((proxy_h - target_h_p) / 2)
+        
+        st.session_state[key_def_box] = (max(0, nl), max(0, nt), target_w_p, target_h_p)
+        st.session_state[key_reset] += 1
+
+    def max_action():
+        """Дія для кнопки 'MAX'"""
+        # 1. Дістаємо поточний обраний аспект
+        current_choice = st.session_state[key_aspect]
+        current_ratio = config.ASPECT_RATIOS.get(current_choice, None)
+        
+        # 2. Рахуємо макс рамку для ЦЬОГО аспекту
+        m_box = calculate_max_crop_box(proxy_w, proxy_h, current_ratio)
+        
+        st.session_state[key_def_box] = m_box
+        st.session_state[key_reset] += 1
+
+    def reset_action():
+        st.session_state[key_rot] = 0
+        st.session_state[key_def_box] = None
+        st.session_state[key_reset] += 1
+    
+    def rotate_action(delta):
+        st.session_state[key_rot] += delta
+        st.session_state[key_reset] += 1
+        st.session_state[key_def_box] = None
 
     # --- LAYOUT ---
     col_canvas, col_controls = st.columns([3, 1], gap="medium")
@@ -95,53 +155,41 @@ def open_editor_dialog(fpath: str, T: dict):
         st.markdown("**Обертання**")
         c1, c2 = st.columns(2)
         with c1:
-            if st.button("↺ -90°", key=f"l_{file_id}", use_container_width=True):
-                st.session_state[f'rot_{file_id}'] -= 90
-                st.session_state[f'reset_{file_id}'] += 1
-                st.session_state[f'default_box_{file_id}'] = None
-                st.rerun()
+            st.button("↺ -90°", key=f"btn_l_{file_id}", use_container_width=True, 
+                      on_click=rotate_action, args=(-90,))
         with c2:
-            if st.button("↻ +90°", key=f"r_{file_id}", use_container_width=True):
-                st.session_state[f'rot_{file_id}'] += 90
-                st.session_state[f'reset_{file_id}'] += 1
-                st.session_state[f'default_box_{file_id}'] = None
-                st.rerun()
+            st.button("↻ +90°", key=f"btn_r_{file_id}", use_container_width=True, 
+                      on_click=rotate_action, args=(90,))
         
         # 2. Aspect Ratio
         st.markdown("**Пропорції**")
-        
-        # Ключ для селекта, щоб ми могли його програмно змінювати
-        aspect_key = f"asp_{file_id}"
-        
+        # Важливо: selectbox керує станом через key_aspect
         aspect_choice = st.selectbox(
             "Співвідношення", 
             list(config.ASPECT_RATIOS.keys()), 
             label_visibility="collapsed",
-            key=aspect_key
+            key=key_aspect
         )
+        # Отримуємо значення для кропера (але для MAX використовуємо значення всередині callback)
         aspect_val = config.ASPECT_RATIOS[aspect_choice]
         
-        # 3. Buttons
+        # 3. Reset & MAX
         br1, br2 = st.columns(2)
         with br1:
-             if st.button("Скинути", key=f"rst_{file_id}", use_container_width=True):
-                st.session_state[f'rot_{file_id}'] = 0
-                st.session_state[f'default_box_{file_id}'] = None
-                st.session_state[f'reset_{file_id}'] += 1
-                st.rerun()
+             st.button("Скинути", key=f"btn_rst_{file_id}", use_container_width=True, 
+                       on_click=reset_action)
         with br2:
-            if st.button("MAX ⛶", key=f"max_{file_id}", use_container_width=True):
-                max_box_tuple = calculate_max_crop_box(proxy_w, proxy_h, aspect_val)
-                st.session_state[f'default_box_{file_id}'] = max_box_tuple
-                st.session_state[f'reset_{file_id}'] += 1
-                st.rerun()
+            # Використовуємо callback для MAX
+            st.button("MAX ⛶", key=f"btn_max_{file_id}", use_container_width=True, 
+                      on_click=max_action)
 
         st.divider()
 
     # --- CANVAS ---
     with col_canvas:
-        cropper_key = f"crp_{file_id}_{st.session_state[f'reset_{file_id}']}_{aspect_choice}"
-        default_coords = st.session_state.get(f'default_box_{file_id}', None)
+        # Динамічний ключ для перемальовки
+        cropper_uid = f"crp_{file_id}_{st.session_state[key_reset]}_{aspect_choice}"
+        default_coords = st.session_state[key_def_box]
 
         rect = st_cropper(
             img_proxy,
@@ -151,11 +199,12 @@ def open_editor_dialog(fpath: str, T: dict):
             default_coords=default_coords,
             should_resize_image=False, 
             return_type='box',
-            key=cropper_key
+            key=cropper_uid
         )
 
-    # --- SAVE & INFO ---
+    # --- CALC & SAVE ---
     with col_controls:
+        # Розрахунок реальних координат
         real_w, real_h = 0, 0
         crop_box = None
         
@@ -173,69 +222,43 @@ def open_editor_dialog(fpath: str, T: dict):
             real_w, real_h = width, height
             crop_box = (left, top, left + width, top + height)
 
-        # --- MANUAL SIZE SECTION ---
+        # --- MANUAL SIZE ---
         st.markdown("**Точний розмір (px)**")
         
-        target_val_w = real_w if real_w > 0 else orig_w
-        target_val_h = real_h if real_h > 0 else orig_h
+        # Підготовка значень для input
+        val_w = real_w if real_w > 0 else orig_w
+        val_h = real_h if real_h > 0 else orig_h
         
-        safe_min_w = min(10, orig_w)
-        safe_min_h = min(10, orig_h)
-        
-        safe_val_w = max(safe_min_w, min(target_val_w, orig_w))
-        safe_val_h = max(safe_min_h, min(target_val_h, orig_h))
+        # Обмеження (щоб не було помилок value < min)
+        safe_min = 10
+        val_w = max(safe_min, min(val_w, orig_w))
+        val_h = max(safe_min, min(val_h, orig_h))
         
         c_w, c_h = st.columns(2)
+        c_w.number_input("W", value=int(val_w), min_value=safe_min, max_value=orig_w, 
+                         label_visibility="collapsed", key=key_input_w)
+        c_h.number_input("H", value=int(val_h), min_value=safe_min, max_value=orig_h, 
+                         label_visibility="collapsed", key=key_input_h)
         
-        input_w = c_w.number_input(
-            "W", value=int(safe_val_w), 
-            min_value=int(safe_min_w), max_value=int(orig_w), 
-            label_visibility="collapsed"
-        )
-        input_h = c_h.number_input(
-            "H", value=int(safe_val_h), 
-            min_value=int(safe_min_h), max_value=int(orig_h), 
-            label_visibility="collapsed"
-        )
-        
-        if st.button("✓ Застосувати розмір", key=f"apply_size_{file_id}", use_container_width=True):
-            # 1. Примусово перемикаємо режим на "Free / Вільний"
-            # Це ВАЖЛИВО, щоб зняти блокування пропорцій
-            st.session_state[f"asp_{file_id}"] = "Free / Вільний"
-            
-            # 2. Розрахунок нових координат
-            target_w_proxy = int(input_w / scale_factor)
-            target_h_proxy = int(input_h / scale_factor)
-            
-            new_left = int((proxy_w - target_w_proxy) / 2)
-            new_top = int((proxy_h - target_h_proxy) / 2)
-            
-            # 3. Збереження
-            st.session_state[f'default_box_{file_id}'] = (
-                max(0, new_left),
-                max(0, new_top),
-                target_w_proxy,
-                target_h_proxy
-            )
-            st.session_state[f'reset_{file_id}'] += 1
-            st.rerun()
+        # Кнопка з Callback
+        st.button("✓ Застосувати розмір", key=f"btn_apply_{file_id}", use_container_width=True,
+                  on_click=apply_size_action)
 
         if real_w > 0:
             st.success(f"Вибрано: **{real_w} x {real_h}** px")
         
         st.divider()
 
-        if st.button(T.get('btn_save_edit', '💾 Зберегти'), type="primary", use_container_width=True, key=f"save_{file_id}"):
+        if st.button(T.get('btn_save_edit', '💾 Зберегти'), type="primary", use_container_width=True, key=f"btn_save_{file_id}"):
             if crop_box:
                 try:
                     final_img = img_original.crop(crop_box)
                     final_img.save(fpath, quality=95, subsampling=0)
                     
-                    if os.path.exists(f"{fpath}.thumb.jpg"): 
-                        os.remove(f"{fpath}.thumb.jpg")
+                    if os.path.exists(f"{fpath}.thumb.jpg"): os.remove(f"{fpath}.thumb.jpg")
                     
-                    keys = [f'rot_{file_id}', f'reset_{file_id}', f'default_box_{file_id}']
-                    for k in keys:
+                    # Cleanup
+                    for k in [key_rot, key_reset, key_def_box, key_aspect, key_input_w, key_input_h]:
                         if k in st.session_state: del st.session_state[k]
                     
                     st.session_state['close_editor'] = True
