@@ -1,32 +1,258 @@
 """
-Watermarker Pro v7.0 - Editor Module (streamlit-cropper-fix)
-=============================================================
-Image editing dialog with crop and rotate using fixed cropper
+Watermarker Pro v7.0 - Simple Editor Module
+============================================
+Simple and reliable image editor without problematic libraries
 """
 
 import streamlit as st
 import os
-from typing import Optional, Tuple, Dict
-from PIL import Image, ImageOps
-
-# Try to import cropper - check which one is available
-try:
-    from streamlit_cropper_fix import st_cropper
-    logger_msg = "Using streamlit-cropper-fix"
-except ImportError:
-    try:
-        from streamlit_cropper import st_cropper
-        logger_msg = "Using streamlit-cropper"
-    except ImportError:
-        st_cropper = None
-        logger_msg = "No cropper library found"
-
+from typing import Tuple
+from PIL import Image, ImageOps, ImageDraw
 import config
 from logger import get_logger
-from validators import validate_image_file, validate_dimensions
+from validators import validate_image_file
 
 logger = get_logger(__name__)
-logger.info(logger_msg)
+
+def get_file_info_str(fpath: str, img: Image.Image) -> str:
+    """Generate file info string"""
+    try:
+        size_bytes = os.path.getsize(fpath)
+        size_mb = size_bytes / (1024 * 1024)
+        size_str = f"{size_mb:.2f} MB" if size_mb >= 1 else f"{size_bytes/1024:.1f} KB"
+        filename = os.path.basename(fpath)
+        return f"📄 **{filename}** • 📏 **{img.width}×{img.height}** • 💾 **{size_str}**"
+    except Exception as e:
+        logger.error(f"Failed to get file info: {e}")
+        return "📄 File info unavailable"
+
+def create_preview_with_box(img: Image.Image, left: int, top: int, width: int, height: int, max_width: int = 700) -> Image.Image:
+    """Create preview image with crop box overlay"""
+    try:
+        # Scale image for preview
+        scale = 1.0
+        if img.width > max_width:
+            scale = max_width / img.width
+            new_h = int(img.height * scale)
+            preview = img.resize((max_width, new_h), Image.Resampling.LANCZOS)
+        else:
+            preview = img.copy()
+        
+        # Draw crop box
+        draw = ImageDraw.Draw(preview)
+        
+        # Scale coordinates
+        box_left = int(left * scale)
+        box_top = int(top * scale)
+        box_right = int((left + width) * scale)
+        box_bottom = int((top + height) * scale)
+        
+        # Draw rectangle
+        draw.rectangle([box_left, box_top, box_right, box_bottom], outline='red', width=3)
+        
+        # Draw corners
+        corner_size = 20
+        for x, y in [(box_left, box_top), (box_right, box_top), (box_left, box_bottom), (box_right, box_bottom)]:
+            draw.line([x-corner_size, y, x+corner_size, y], fill='red', width=3)
+            draw.line([x, y-corner_size, x, y+corner_size], fill='red', width=3)
+        
+        return preview
+    except Exception as e:
+        logger.error(f"Preview creation failed: {e}")
+        return img
+
+@st.dialog("🛠 Editor", width="large")
+def open_editor_dialog(fpath: str, T: dict):
+    """Simple image editor with rotation and manual crop"""
+    try:
+        validate_image_file(fpath)
+        file_id = os.path.basename(fpath)
+        
+        # Initialize state
+        if f'rot_{file_id}' not in st.session_state:
+            st.session_state[f'rot_{file_id}'] = 0
+        if f'crop_left_{file_id}' not in st.session_state:
+            st.session_state[f'crop_left_{file_id}'] = 0
+        if f'crop_top_{file_id}' not in st.session_state:
+            st.session_state[f'crop_top_{file_id}'] = 0
+        if f'crop_width_{file_id}' not in st.session_state:
+            st.session_state[f'crop_width_{file_id}'] = None
+        if f'crop_height_{file_id}' not in st.session_state:
+            st.session_state[f'crop_height_{file_id}'] = None
+        
+        # Load image
+        try:
+            with Image.open(fpath) as img_temp:
+                img_full = ImageOps.exif_transpose(img_temp)
+                img_full = img_full.convert('RGB')
+            
+            angle = st.session_state[f'rot_{file_id}']
+            if angle != 0:
+                img_full = img_full.rotate(-angle, expand=True, resample=Image.BICUBIC)
+        except Exception as e:
+            st.error(f"❌ Error loading image: {e}")
+            return
+        
+        orig_w, orig_h = img_full.size
+        
+        # Initialize crop dimensions if not set
+        if st.session_state[f'crop_width_{file_id}'] is None:
+            st.session_state[f'crop_width_{file_id}'] = orig_w
+        if st.session_state[f'crop_height_{file_id}'] is None:
+            st.session_state[f'crop_height_{file_id}'] = orig_h
+        
+        st.caption(get_file_info_str(fpath, img_full))
+        
+        # Layout
+        col_canvas, col_controls = st.columns([2.5, 1], gap="medium")
+        
+        # === CONTROLS ===
+        with col_controls:
+            st.markdown("### 🔄 Rotate")
+            c1, c2, c3 = st.columns(3)
+            
+            with c1:
+                if st.button("↺", use_container_width=True, help="Rotate -90°"):
+                    st.session_state[f'rot_{file_id}'] -= 90
+                    st.rerun()
+            with c2:
+                if st.button("↻", use_container_width=True, help="Rotate +90°"):
+                    st.session_state[f'rot_{file_id}'] += 90
+                    st.rerun()
+            with c3:
+                if st.button("⟲", use_container_width=True, help="Reset"):
+                    st.session_state[f'rot_{file_id}'] = 0
+                    st.rerun()
+            
+            st.divider()
+            st.markdown("### ✂️ Crop")
+            
+            # Aspect ratio
+            aspect_choice = st.selectbox(
+                "Aspect Ratio",
+                list(config.ASPECT_RATIOS.keys()),
+                key=f"aspect_{file_id}"
+            )
+            aspect_val = config.ASPECT_RATIOS[aspect_choice]
+            
+            # MAX button
+            if st.button("⛶ MAX", use_container_width=True):
+                if aspect_val is None:
+                    max_w, max_h = orig_w, orig_h
+                else:
+                    ratio = aspect_val[0] / aspect_val[1]
+                    max_w = orig_w
+                    max_h = int(max_w / ratio)
+                    if max_h > orig_h:
+                        max_h = orig_h
+                        max_w = int(max_h * ratio)
+                
+                st.session_state[f'crop_width_{file_id}'] = max_w
+                st.session_state[f'crop_height_{file_id}'] = max_h
+                st.session_state[f'crop_left_{file_id}'] = (orig_w - max_w) // 2
+                st.session_state[f'crop_top_{file_id}'] = (orig_h - max_h) // 2
+                st.rerun()
+            
+            st.divider()
+            st.markdown("### 📐 Crop Area")
+            
+            # Position
+            col_x, col_y = st.columns(2)
+            with col_x:
+                crop_left = st.number_input(
+                    "Left (px)",
+                    0, orig_w - 10,
+                    st.session_state[f'crop_left_{file_id}'],
+                    10,
+                    key=f"left_{file_id}"
+                )
+            with col_y:
+                crop_top = st.number_input(
+                    "Top (px)",
+                    0, orig_h - 10,
+                    st.session_state[f'crop_top_{file_id}'],
+                    10,
+                    key=f"top_{file_id}"
+                )
+            
+            # Size
+            col_w, col_h = st.columns(2)
+            with col_w:
+                crop_width = st.number_input(
+                    "Width (px)",
+                    10, orig_w,
+                    st.session_state[f'crop_width_{file_id}'],
+                    10,
+                    key=f"width_{file_id}"
+                )
+            with col_h:
+                crop_height = st.number_input(
+                    "Height (px)",
+                    10, orig_h,
+                    st.session_state[f'crop_height_{file_id}'],
+                    10,
+                    key=f"height_{file_id}"
+                )
+            
+            # Update state
+            st.session_state[f'crop_left_{file_id}'] = crop_left
+            st.session_state[f'crop_top_{file_id}'] = crop_top
+            st.session_state[f'crop_width_{file_id}'] = crop_width
+            st.session_state[f'crop_height_{file_id}'] = crop_height
+            
+            # Validate and clamp
+            if crop_left + crop_width > orig_w:
+                crop_width = orig_w - crop_left
+            if crop_top + crop_height > orig_h:
+                crop_height = orig_h - crop_top
+            
+            st.info(f"📏 **{crop_width} × {crop_height}** px")
+            
+            # Center button
+            if st.button("⊙ Center", use_container_width=True):
+                st.session_state[f'crop_left_{file_id}'] = (orig_w - crop_width) // 2
+                st.session_state[f'crop_top_{file_id}'] = (orig_h - crop_height) // 2
+                st.rerun()
+            
+            st.divider()
+            
+            # Save button
+            if st.button("💾 Save Changes", type="primary", use_container_width=True):
+                try:
+                    crop_box = (crop_left, crop_top, crop_left + crop_width, crop_top + crop_height)
+                    final_image = img_full.crop(crop_box)
+                    final_image.save(fpath, quality=95, subsampling=0, optimize=True)
+                    
+                    # Remove thumbnail
+                    thumb_path = f"{fpath}.thumb.jpg"
+                    if os.path.exists(thumb_path):
+                        try:
+                            os.remove(thumb_path)
+                        except:
+                            pass
+                    
+                    # Clean state
+                    for k in list(st.session_state.keys()):
+                        if file_id in k:
+                            del st.session_state[k]
+                    
+                    st.session_state['close_editor'] = True
+                    st.toast("✅ Changes saved!")
+                    logger.info(f"Image saved: {crop_width}×{crop_height} to {fpath}")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ Save failed: {e}")
+                    logger.error(f"Save failed: {e}", exc_info=True)
+        
+        # === CANVAS ===
+        with col_canvas:
+            st.markdown("### 👁️ Preview")
+            preview = create_preview_with_box(img_full, crop_left, crop_top, crop_width, crop_height)
+            st.image(preview, use_container_width=True)
+    
+    except Exception as e:
+        st.error(f"❌ Editor error: {e}")
+        logger.error(f"Editor failed: {e}", exc_info=True)
 
 def get_file_info_str(fpath: str, img: Image.Image) -> str:
     """Generate file info string for display"""
