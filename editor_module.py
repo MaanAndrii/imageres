@@ -1,14 +1,15 @@
 """
-Watermarker Pro v7.0 - Editor Module
-=====================================
-Image editing dialog with crop and rotate (fixed)
+Watermarker Pro v7.0 - Editor Module (fixed & complete)
+Image editing dialog with crop, rotate, manual size sync, MAX, and preview
 """
 
-import streamlit as st
 import os
 from typing import Optional, Tuple, Dict
+
+import streamlit as st
 from PIL import Image, ImageOps
 from streamlit_cropper import st_cropper
+
 import config
 from logger import get_logger
 from validators import validate_image_file, validate_dimensions
@@ -40,14 +41,20 @@ def clamp_box_to_canvas(box: Dict[str, int], canvas_w: int, canvas_h: int) -> Di
 
     return {'left': left, 'top': top, 'width': width, 'height': height}
 
-def sync_manual_size_from_rect(rect: Optional[Dict[str, int]], scale_factor: float, img_full_w: int, img_full_h: int, file_id: str):
+def sync_manual_size_from_rect(
+    rect: Optional[Dict[str, int]],
+    scale_factor: float,
+    img_full_w: int,
+    img_full_h: int,
+    file_id: str
+):
     """
     Update manual width/height inputs to match current rect (original pixels).
     """
     if not rect:
         return
-    w = clamp_int(int(rect['width'] * scale_factor), 10, img_full_w)
-    h = clamp_int(int(rect['height'] * scale_factor), 10, img_full_h)
+    w = clamp_int(int(round(rect['width'] * scale_factor)), 10, img_full_w)
+    h = clamp_int(int(round(rect['height'] * scale_factor)), 10, img_full_h)
     st.session_state[f"manual_w_{file_id}"] = w
     st.session_state[f"manual_h_{file_id}"] = h
 
@@ -94,7 +101,11 @@ def create_proxy_image(img: Image.Image, target_width: int = None) -> Tuple[Imag
         st.warning("⚠️ Proxy image could not be created. Editing large image directly may be slower.")
         return img, 1.0
 
-def calculate_max_crop_box(img_w: int, img_h: int, aspect_ratio: Optional[Tuple[int, int]]) -> Dict[str, int]:
+def calculate_max_crop_box(
+    img_w: int,
+    img_h: int,
+    aspect_ratio: Optional[Tuple[int, int]]
+) -> Dict[str, int]:
     """
     Calculate maximum crop box for given aspect ratio on the given canvas (proxy).
     Returns dict: left, top, width, height
@@ -150,7 +161,8 @@ def cleanup_editor_state(file_id: str):
     """
     Clear editor-related session state keys for a given file_id
     """
-    for k in [f'rot_{file_id}', f'reset_{file_id}', f'crop_box_{file_id}']:
+    for k in [f'rot_{file_id}', f'editor_reset_{file_id}', f'crop_box_{file_id}',
+              f"manual_w_{file_id}", f"manual_h_{file_id}"]:
         if k in st.session_state:
             del st.session_state[k]
 
@@ -169,9 +181,9 @@ def open_editor_dialog(fpath: str, T: dict):
 
         file_id = os.path.basename(fpath)
 
-        # Initialize state
+        # Initialize state (distinct keys: widget vs internal)
         st.session_state.setdefault(f'rot_{file_id}', 0)
-        st.session_state.setdefault(f'reset_{file_id}', 0)
+        st.session_state.setdefault(f'editor_reset_{file_id}', 0)
         st.session_state.setdefault(f'crop_box_{file_id}', None)
 
         # Load original image
@@ -183,7 +195,11 @@ def open_editor_dialog(fpath: str, T: dict):
             # Apply rotation if needed
             angle = st.session_state[f'rot_{file_id}']
             if angle % 360 != 0:
-                img_full = img_full.rotate(-angle, expand=True, resample=Image.BICUBIC)
+                img_full = img_full.rotate(
+                    -angle,
+                    expand=True,
+                    resample=Image.BICUBIC
+                )
 
         except Exception as e:
             st.error(f"❌ Error loading image: {e}")
@@ -209,23 +225,24 @@ def open_editor_dialog(fpath: str, T: dict):
             with c1:
                 if st.button("↺ -90°", use_container_width=True, key=f"rot_left_{file_id}"):
                     st.session_state[f'rot_{file_id}'] -= 90
-                    st.session_state[f'reset_{file_id}'] += 1
+                    st.session_state[f'editor_reset_{file_id}'] += 1
                     st.session_state[f'crop_box_{file_id}'] = None
                     st.rerun()
 
             with c2:
                 if st.button("↻ +90°", use_container_width=True, key=f"rot_right_{file_id}"):
                     st.session_state[f'rot_{file_id}'] += 90
-                    st.session_state[f'reset_{file_id}'] += 1
+                    st.session_state[f'editor_reset_{file_id}'] += 1
                     st.session_state[f'crop_box_{file_id}'] = None
                     st.rerun()
 
-            # Reset button
-            if st.button("Reset", use_container_width=True, key=f"reset_{file_id}"):
+            # Reset button (distinct key to avoid conflicts)
+            if st.button("Reset", use_container_width=True, key=f"btn_reset_{file_id}"):
                 st.session_state[f'rot_{file_id}'] = 0
                 st.session_state[f'crop_box_{file_id}'] = None
-                st.session_state[f'reset_{file_id}'] += 1
+                st.session_state[f'editor_reset_{file_id}'] += 1
                 st.toast("✅ Reset done", icon="♻️")
+                logger.info(f"Reset pressed for {file_id}")
                 st.rerun()
 
             st.divider()
@@ -291,9 +308,8 @@ def open_editor_dialog(fpath: str, T: dict):
                     proxy_w, proxy_h
                 )
                 st.session_state[f'crop_box_{file_id}'] = new_box
-                st.session_state[f'reset_{file_id}'] += 1
+                st.session_state[f'editor_reset_{file_id}'] += 1
 
-                # Use valid emoji (no shortcodes)
                 st.toast(f"✅ Set: {manual_width}×{manual_height}px", icon="📐")
                 logger.debug(f"Apply manual size → proxy box {new_box} (scale {scale_factor:.4f})")
 
@@ -311,7 +327,7 @@ def open_editor_dialog(fpath: str, T: dict):
                 # Calculate MAX box for PROXY image
                 max_box = calculate_max_crop_box(proxy_w, proxy_h, aspect_val)
                 st.session_state[f'crop_box_{file_id}'] = max_box
-                st.session_state[f'reset_{file_id}'] += 1
+                st.session_state[f'editor_reset_{file_id}'] += 1
 
                 # Calculate real (original) dimensions for display
                 real_w = int(round(max_box['width'] * scale_factor))
@@ -333,7 +349,7 @@ def open_editor_dialog(fpath: str, T: dict):
 
         # === CANVAS ===
         with col_canvas:
-            cropper_id = f"crp_{file_id}_{st.session_state[f'reset_{file_id}']}_{aspect_choice}"
+            cropper_id = f"crp_{file_id}_{st.session_state[f'editor_reset_{file_id}']}_{aspect_choice}"
             default_box = st.session_state.get(f'crop_box_{file_id}', None)
 
             # Ensure default_box is valid for st_cropper
@@ -356,10 +372,11 @@ def open_editor_dialog(fpath: str, T: dict):
                 logger.error(f"Cropper failed: {e}", exc_info=True)
                 rect = None
 
-        # === CROP INFO & SAVE ===
+        # === CROP INFO, PREVIEW & SAVE ===
         with col_controls:
             crop_box = None
             real_w, real_h = 0, 0
+            preview_img = None
 
             if rect:
                 try:
@@ -372,8 +389,8 @@ def open_editor_dialog(fpath: str, T: dict):
                     orig_w, orig_h = img_full.size
 
                     # Clamp within original
-                    left = clamp_int(left, 0, orig_w - 1)
-                    top = clamp_int(top, 0, orig_h - 1)
+                    left = clamp_int(left, 0, max(0, orig_w - 1))
+                    top = clamp_int(top, 0, max(0, orig_h - 1))
 
                     if left + width > orig_w:
                         width = orig_w - left
@@ -395,6 +412,9 @@ def open_editor_dialog(fpath: str, T: dict):
                     # Sync manual size fields to current rect
                     sync_manual_size_from_rect(rect, scale_factor, orig_w, orig_h, file_id)
 
+                    # Preview cropped image
+                    preview_img = img_full.crop(crop_box)
+
                 except Exception as e:
                     logger.error(f"Crop calculation failed: {e}", exc_info=True)
                     st.warning(f"⚠️ Помилка розрахунку: {e}")
@@ -404,6 +424,10 @@ def open_editor_dialog(fpath: str, T: dict):
                 st.info(f"📏 **{real_w} × {real_h}** px")
             else:
                 st.info("📏 **Оберіть область**")
+
+            # Show preview (scaled to control column width)
+            if preview_img:
+                st.image(preview_img, caption=f"Preview {real_w}×{real_h}px", use_column_width=True)
 
             # Save button
             if st.button(
