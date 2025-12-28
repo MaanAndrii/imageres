@@ -8,12 +8,25 @@ import streamlit as st
 import os
 from typing import Optional, Tuple, Dict
 from PIL import Image, ImageOps
-from streamlit_cropper_fix import st_cropper
+
+# Try to import cropper - check which one is available
+try:
+    from streamlit_cropper_fix import st_cropper
+    logger_msg = "Using streamlit-cropper-fix"
+except ImportError:
+    try:
+        from streamlit_cropper import st_cropper
+        logger_msg = "Using streamlit-cropper"
+    except ImportError:
+        st_cropper = None
+        logger_msg = "No cropper library found"
+
 import config
 from logger import get_logger
 from validators import validate_image_file, validate_dimensions
 
 logger = get_logger(__name__)
+logger.info(logger_msg)
 
 def get_file_info_str(fpath: str, img: Image.Image) -> str:
     """Generate file info string for display"""
@@ -211,24 +224,28 @@ def open_editor_dialog(fpath: str, T: dict):
         
         # === CANVAS ===
         with col_canvas:
-            try:
-                # Create unique key for cropper
-                cropper_key = f"crop_{file_id}_{st.session_state[f'reset_{file_id}']}"
-                
-                # Use streamlit-cropper-fix
-                rect = st_cropper(
-                    img_proxy,
-                    realtime_update=True,
-                    box_color='#FF0000',
-                    aspect_ratio=aspect_val,
-                    return_type='box',
-                    key=cropper_key
-                )
-                
-            except Exception as e:
-                st.error(f"Cropper error: {e}")
-                logger.error(f"Cropper failed: {e}", exc_info=True)
+            if st_cropper is None:
+                st.error("❌ Cropper library not installed. Please install: pip install streamlit-cropper-fix")
                 rect = None
+            else:
+                try:
+                    # Create unique key for cropper
+                    cropper_key = f"crop_{file_id}_{st.session_state[f'reset_{file_id}']}"
+                    
+                    # Use streamlit-cropper (fix or original)
+                    rect = st_cropper(
+                        img_proxy,
+                        realtime_update=True,
+                        box_color='#FF0000',
+                        aspect_ratio=aspect_val,
+                        return_type='box',
+                        key=cropper_key
+                    )
+                    
+                except Exception as e:
+                    st.error(f"Cropper error: {e}")
+                    logger.error(f"Cropper failed: {e}", exc_info=True)
+                    rect = None
         
         # === SAVE SECTION ===
         with col_controls:
