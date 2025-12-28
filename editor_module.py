@@ -18,7 +18,6 @@ def get_file_info_str(fpath: str, img: Image.Image) -> str:
         return "📄 Інформація недоступна"
 
 def create_proxy_image(img: Image.Image, target_width: int = 700):
-    """Створює легку копію зображення для UI."""
     w, h = img.size
     if w <= target_width:
         return img, 1.0
@@ -29,30 +28,21 @@ def create_proxy_image(img: Image.Image, target_width: int = 700):
     return proxy, w / target_width
 
 def calculate_max_crop_box(proxy_w: int, proxy_h: int, aspect_ratio: tuple) -> tuple:
-    """
-    Розраховує максимальну рамку (для кнопки MAX). 
-    Повертає tuple (left, top, width, height).
-    """
     pad = 10
     if not aspect_ratio:
-        # Free mode: відступ 10px, але гарантуємо мінімальний розмір 10px
         safe_w = max(10, proxy_w - 2*pad)
         safe_h = max(10, proxy_h - 2*pad)
         return (pad, pad, safe_w, safe_h)
     
-    # Співвідношення
     target_ratio = aspect_ratio[0] / aspect_ratio[1]
     
-    # 1. Пробуємо вписати по ширині
     box_w = proxy_w
     box_h = int(box_w / target_ratio)
     
-    # 2. Якщо висота завелика, вписуємо по висоті
     if box_h > proxy_h:
         box_h = proxy_h
         box_w = int(box_h * target_ratio)
         
-    # Центруємо
     left = int((proxy_w - box_w) / 2)
     top = int((proxy_h - box_h) / 2)
     
@@ -82,12 +72,10 @@ def open_editor_dialog(fpath: str, T: dict):
         img_original = ImageOps.exif_transpose(img_original)
         img_original = img_original.convert('RGB')
         
-        # Поворот
         angle = st.session_state[f'rot_{file_id}']
         if angle != 0:
             img_original = img_original.rotate(-angle, expand=True)
             
-        # Proxy
         img_proxy, scale_factor = create_proxy_image(img_original)
         proxy_w, proxy_h = img_proxy.size
         orig_w, orig_h = img_original.size
@@ -103,7 +91,7 @@ def open_editor_dialog(fpath: str, T: dict):
 
     # --- CONTROLS ---
     with col_controls:
-        # Rotate
+        # 1. Rotate
         st.markdown("**Обертання**")
         c1, c2 = st.columns(2)
         with c1:
@@ -119,17 +107,21 @@ def open_editor_dialog(fpath: str, T: dict):
                 st.session_state[f'default_box_{file_id}'] = None
                 st.rerun()
         
-        # Aspect Ratio
+        # 2. Aspect Ratio
         st.markdown("**Пропорції**")
+        
+        # Ключ для селекта, щоб ми могли його програмно змінювати
+        aspect_key = f"asp_{file_id}"
+        
         aspect_choice = st.selectbox(
             "Співвідношення", 
             list(config.ASPECT_RATIOS.keys()), 
             label_visibility="collapsed",
-            key=f"asp_{file_id}"
+            key=aspect_key
         )
         aspect_val = config.ASPECT_RATIOS[aspect_choice]
         
-        # Buttons
+        # 3. Buttons
         br1, br2 = st.columns(2)
         with br1:
              if st.button("Скинути", key=f"rst_{file_id}", use_container_width=True):
@@ -139,7 +131,6 @@ def open_editor_dialog(fpath: str, T: dict):
                 st.rerun()
         with br2:
             if st.button("MAX ⛶", key=f"max_{file_id}", use_container_width=True):
-                # Розраховуємо і зберігаємо як TUPLE
                 max_box_tuple = calculate_max_crop_box(proxy_w, proxy_h, aspect_val)
                 st.session_state[f'default_box_{file_id}'] = max_box_tuple
                 st.session_state[f'reset_{file_id}'] += 1
@@ -169,13 +160,11 @@ def open_editor_dialog(fpath: str, T: dict):
         crop_box = None
         
         if rect:
-            # Масштабуємо з Proxy в Original
             left = int(rect['left'] * scale_factor)
             top = int(rect['top'] * scale_factor)
             width = int(rect['width'] * scale_factor)
             height = int(rect['height'] * scale_factor)
             
-            # Захист меж
             left = max(0, min(left, orig_w))
             top = max(0, min(top, orig_h))
             if left + width > orig_w: width = orig_w - left
@@ -184,49 +173,44 @@ def open_editor_dialog(fpath: str, T: dict):
             real_w, real_h = width, height
             crop_box = (left, top, left + width, top + height)
 
-        # --- MANUAL SIZE SECTION (FIXED) ---
+        # --- MANUAL SIZE SECTION ---
         st.markdown("**Точний розмір (px)**")
         
-        # Значення, яке ми хочемо показати в полі
         target_val_w = real_w if real_w > 0 else orig_w
         target_val_h = real_h if real_h > 0 else orig_h
         
-        # 1. Визначаємо безпечний мінімум (не менше 10, але і не більше за оригінал)
         safe_min_w = min(10, orig_w)
         safe_min_h = min(10, orig_h)
         
-        # 2. "Притискаємо" значення (clamp), щоб воно не вилетіло за min/max
-        # value має бути >= safe_min і <= orig_w
         safe_val_w = max(safe_min_w, min(target_val_w, orig_w))
         safe_val_h = max(safe_min_h, min(target_val_h, orig_h))
         
         c_w, c_h = st.columns(2)
         
-        # 3. Використовуємо безпечні значення у віджеті
         input_w = c_w.number_input(
-            "W", 
-            value=int(safe_val_w), 
-            min_value=int(safe_min_w), 
-            max_value=int(orig_w), 
+            "W", value=int(safe_val_w), 
+            min_value=int(safe_min_w), max_value=int(orig_w), 
             label_visibility="collapsed"
         )
         input_h = c_h.number_input(
-            "H", 
-            value=int(safe_val_h), 
-            min_value=int(safe_min_h), 
-            max_value=int(orig_h), 
+            "H", value=int(safe_val_h), 
+            min_value=int(safe_min_h), max_value=int(orig_h), 
             label_visibility="collapsed"
         )
         
         if st.button("✓ Застосувати розмір", key=f"apply_size_{file_id}", use_container_width=True):
-            # Перерахунок в Proxy координати
+            # 1. Примусово перемикаємо режим на "Free / Вільний"
+            # Це ВАЖЛИВО, щоб зняти блокування пропорцій
+            st.session_state[f"asp_{file_id}"] = "Free / Вільний"
+            
+            # 2. Розрахунок нових координат
             target_w_proxy = int(input_w / scale_factor)
             target_h_proxy = int(input_h / scale_factor)
             
-            # Центрування
             new_left = int((proxy_w - target_w_proxy) / 2)
             new_top = int((proxy_h - target_h_proxy) / 2)
             
+            # 3. Збереження
             st.session_state[f'default_box_{file_id}'] = (
                 max(0, new_left),
                 max(0, new_top),
