@@ -6,7 +6,7 @@ Image editing dialog with crop and rotate
 
 import streamlit as st
 import os
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Dict
 from PIL import Image, ImageOps
 from streamlit_cropper import st_cropper
 import config
@@ -87,74 +87,79 @@ def create_proxy_image(
         logger.error(f"Proxy creation failed: {e}")
         return img, 1.0
 
-def get_max_box(
+def calculate_max_crop_box(
     img_w: int,
     img_h: int,
-    aspect_data: Optional[Tuple[int, int]]
-) -> Tuple[int, int, int, int]:
+    aspect_ratio: Optional[Tuple[int, int]]
+) -> Dict[str, int]:
     """
-    Calculate maximum crop box for given aspect ratio that fits image bounds
-    
-    ВАЖЛИВО: Повертає координати для PROXY зображення (вже масштабовані)
+    Calculate maximum crop box for given aspect ratio
+    Returns box in format compatible with st_cropper default_coords
     
     Args:
-        img_w: Proxy image width (after scaling)
-        img_h: Proxy image height (after scaling)
-        aspect_data: Aspect ratio tuple (w, h) or None
+        img_w: Image width
+        img_h: Image height
+        aspect_ratio: Aspect ratio tuple (w, h) or None
         
     Returns:
-        Crop box tuple (left, top, width, height) for PROXY coordinates
+        Dict with keys: left, top, width, height
     """
     try:
-        if aspect_data is None:
-            # Free aspect - максимальна область з невеликим відступом
+        if aspect_ratio is None:
+            # Free aspect - максимальна область з відступом
             pad = 5
-            return (
-                pad,
-                pad,
-                max(10, img_w - 2*pad),
-                max(10, img_h - 2*pad)
-            )
+            return {
+                'left': pad,
+                'top': pad,
+                'width': max(10, img_w - 2 * pad),
+                'height': max(10, img_h - 2 * pad)
+            }
         
-        # Calculate ratio
-        ratio_w, ratio_h = aspect_data
+        ratio_w, ratio_h = aspect_ratio
         if ratio_w == 0 or ratio_h == 0:
-            logger.warning(f"Invalid aspect ratio: {aspect_data}")
-            return (0, 0, img_w, img_h)
+            logger.warning(f"Invalid aspect ratio: {aspect_ratio}")
+            return {'left': 0, 'top': 0, 'width': img_w, 'height': img_h}
         
         ratio_val = ratio_w / ratio_h
         
-        # Спочатку пробуємо вписати по ширині (використовуємо ВСЮ ширину)
-        try_w = img_w
-        try_h = int(try_w / ratio_val)
+        # Спочатку пробуємо вписати по ширині (використати ВСЮ ширину)
+        crop_w = img_w
+        crop_h = int(crop_w / ratio_val)
         
-        if try_h > img_h:
-            # Не влізло по висоті - вписуємо по висоті (використовуємо ВСЮ висоту)
-            try_h = img_h
-            try_w = int(try_h * ratio_val)
+        if crop_h > img_h:
+            # Не влізло по висоті - вписуємо по висоті (використати ВСЮ висоту)
+            crop_h = img_h
+            crop_w = int(crop_h * ratio_val)
         
         # Гарантуємо що розміри в межах зображення
-        try_w = max(10, min(try_w, img_w))
-        try_h = max(10, min(try_h, img_h))
+        crop_w = max(10, min(crop_w, img_w))
+        crop_h = max(10, min(crop_h, img_h))
         
         # Центруємо рамку
-        left = (img_w - try_w) // 2
-        top = (img_h - try_h) // 2
+        left = (img_w - crop_w) // 2
+        top = (img_h - crop_h) // 2
         
         # Гарантуємо що координати в межах
-        left = max(0, min(left, img_w - try_w))
-        top = max(0, min(top, img_h - try_h))
+        left = max(0, min(left, img_w - crop_w))
+        top = max(0, min(top, img_h - crop_h))
+        
+        result = {
+            'left': left,
+            'top': top,
+            'width': crop_w,
+            'height': crop_h
+        }
         
         logger.debug(
-            f"MAX box calculated: {try_w}x{try_h} at ({left}, {top}) "
+            f"MAX box calculated: {crop_w}x{crop_h} at ({left}, {top}) "
             f"for image {img_w}x{img_h}, ratio {ratio_w}:{ratio_h}"
         )
         
-        return (left, top, try_w, try_h)
+        return result
     
     except Exception as e:
         logger.error(f"Max box calculation failed: {e}")
-        return (0, 0, img_w, img_h)
+        return {'left': 0, 'top': 0, 'width': img_w, 'height': img_h}
 
 @st.dialog("🛠 Editor", width="large")
 def open_editor_dialog(fpath: str, T: dict):
@@ -178,8 +183,8 @@ def open_editor_dialog(fpath: str, T: dict):
         if f'reset_{file_id}' not in st.session_state:
             st.session_state[f'reset_{file_id}'] = 0
         
-        if f'def_coords_{file_id}' not in st.session_state:
-            st.session_state[f'def_coords_{file_id}'] = None
+        if f'crop_box_{file_id}' not in st.session_state:
+            st.session_state[f'crop_box_{file_id}'] = None
         
         # Load original image
         try:
@@ -225,7 +230,7 @@ def open_editor_dialog(fpath: str, T: dict):
                 ):
                     st.session_state[f'rot_{file_id}'] -= 90
                     st.session_state[f'reset_{file_id}'] += 1
-                    st.session_state[f'def_coords_{file_id}'] = None
+                    st.session_state[f'crop_box_{file_id}'] = None
                     st.rerun()
             
             with c2:
@@ -236,7 +241,7 @@ def open_editor_dialog(fpath: str, T: dict):
                 ):
                     st.session_state[f'rot_{file_id}'] += 90
                     st.session_state[f'reset_{file_id}'] += 1
-                    st.session_state[f'def_coords_{file_id}'] = None
+                    st.session_state[f'crop_box_{file_id}'] = None
                     st.rerun()
             
             st.divider()
@@ -251,27 +256,83 @@ def open_editor_dialog(fpath: str, T: dict):
             )
             aspect_val = config.ASPECT_RATIOS[aspect_choice]
             
+            # Manual size input
+            st.markdown("**📐 Manual Size (px)**")
+            col_w, col_h = st.columns(2)
+            
+            with col_w:
+                manual_width = st.number_input(
+                    "Width",
+                    min_value=10,
+                    max_value=img_full.width,
+                    value=img_full.width // 2,
+                    step=10,
+                    key=f"manual_w_{file_id}",
+                    label_visibility="collapsed"
+                )
+            
+            with col_h:
+                manual_height = st.number_input(
+                    "Height",
+                    min_value=10,
+                    max_value=img_full.height,
+                    value=img_full.height // 2,
+                    step=10,
+                    key=f"manual_h_{file_id}",
+                    label_visibility="collapsed"
+                )
+            
+            # Apply manual size button
+            if st.button(
+                "✓ Apply Size",
+                use_container_width=True,
+                key=f"apply_manual_{file_id}",
+                help="Set crop box to specified dimensions"
+            ):
+                # Scale to proxy coordinates
+                proxy_width = int(manual_width / scale_factor)
+                proxy_height = int(manual_height / scale_factor)
+                
+                # Center the box
+                left = (proxy_w - proxy_width) // 2
+                top = (proxy_h - proxy_height) // 2
+                
+                # Ensure bounds
+                left = max(0, min(left, proxy_w - proxy_width))
+                top = max(0, min(top, proxy_h - proxy_height))
+                
+                st.session_state[f'crop_box_{file_id}'] = {
+                    'left': left,
+                    'top': top,
+                    'width': proxy_width,
+                    'height': proxy_height
+                }
+                st.session_state[f'reset_{file_id}'] += 1
+                st.toast(f"✅ Set: {manual_width}×{manual_height}px", icon="📐")
+                st.rerun()
+            
+            st.divider()
+            
             # MAX button
             if st.button(
                 "MAX ⛶",
                 use_container_width=True,
                 key=f"max_{file_id}",
-                help="Максимальна область кадрування у вибраному співвідношенні"
+                help="Максимальна область у вибраному співвідношенні"
             ):
-                # Розраховуємо максимальну рамку для PROXY зображення
-                max_box = get_max_box(proxy_w, proxy_h, aspect_val)
-                st.session_state[f'def_coords_{file_id}'] = max_box
+                # Calculate MAX box for PROXY image
+                max_box = calculate_max_crop_box(proxy_w, proxy_h, aspect_val)
+                st.session_state[f'crop_box_{file_id}'] = max_box
                 st.session_state[f'reset_{file_id}'] += 1
                 
-                # Інформативне повідомлення
+                # Calculate real dimensions for display
+                real_w = int(max_box['width'] * scale_factor)
+                real_h = int(max_box['height'] * scale_factor)
+                
                 if aspect_val:
                     ratio_str = f"{aspect_val[0]}:{aspect_val[1]}"
                 else:
-                    ratio_str = "вільне"
-                
-                # Розрахунок реальних розмірів для показу користувачу
-                real_w = int(max_box[2] * scale_factor)
-                real_h = int(max_box[3] * scale_factor)
+                    ratio_str = "free"
                 
                 st.toast(
                     f"✅ MAX: {real_w}×{real_h}px ({ratio_str})",
@@ -282,13 +343,11 @@ def open_editor_dialog(fpath: str, T: dict):
                     f"for proxy {proxy_w}x{proxy_h}"
                 )
                 st.rerun()
-            
-            st.divider()
         
         # === CANVAS ===
         with col_canvas:
             cropper_id = f"crp_{file_id}_{st.session_state[f'reset_{file_id}']}_{aspect_choice}"
-            def_coords = st.session_state.get(f'def_coords_{file_id}', None)
+            default_box = st.session_state.get(f'crop_box_{file_id}', None)
             
             try:
                 rect = st_cropper(
@@ -297,11 +356,9 @@ def open_editor_dialog(fpath: str, T: dict):
                     box_color='#FF0000',
                     aspect_ratio=aspect_val,
                     should_resize_image=False,
-                    default_coords=def_coords,
+                    default_coords=default_box,
                     return_type='box',
-                    key=cropper_id,
-                    # ВАЖЛИВО: Блокування рамки в межах зображення
-                    box_algorithm="constrained"  # Не дозволяє виходити за межі
+                    key=cropper_id
                 )
             except Exception as e:
                 st.error(f"Cropper error: {e}")
@@ -315,20 +372,20 @@ def open_editor_dialog(fpath: str, T: dict):
             
             if rect:
                 try:
-                    # ВАЖЛИВО: rect містить координати PROXY зображення
-                    # scale_factor - це співвідношення ОРИГІНАЛ / PROXY
-                    # Тому множимо на scale_factor для отримання координат оригіналу
+                    # rect містить координати PROXY зображення
+                    # scale_factor = оригінал_width / proxy_width
+                    # Множимо на scale_factor для отримання координат оригіналу
                     
                     left = int(rect['left'] * scale_factor)
                     top = int(rect['top'] * scale_factor)
                     width = int(rect['width'] * scale_factor)
                     height = int(rect['height'] * scale_factor)
                     
-                    # Clamp до меж ОРИГІНАЛЬНОГО зображення (безпека)
+                    # Clamp до меж ОРИГІНАЛЬНОГО зображення
                     orig_w, orig_h = img_full.size
                     
-                    left = max(0, left)
-                    top = max(0, top)
+                    left = max(0, min(left, orig_w))
+                    top = max(0, min(top, orig_h))
                     
                     # Якщо рамка виходить за межі - обрізаємо розмір
                     if left + width > orig_w:
@@ -392,7 +449,7 @@ def open_editor_dialog(fpath: str, T: dict):
                         keys_to_delete = [
                             f'rot_{file_id}',
                             f'reset_{file_id}',
-                            f'def_coords_{file_id}'
+                            f'crop_box_{file_id}'
                         ]
                         for k in keys_to_delete:
                             if k in st.session_state:
