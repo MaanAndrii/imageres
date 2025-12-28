@@ -8,7 +8,7 @@ from validators import validate_image_file
 
 logger = get_logger(__name__)
 
-# --- FUNCTIONS ---
+# --- ДОПОМІЖНІ ФУНКЦІЇ ---
 
 def get_file_info_str(fpath: str, img: Image.Image) -> str:
     try:
@@ -30,12 +30,12 @@ def create_proxy_image(img: Image.Image, target_width: int = 700):
     return proxy, w / target_width
 
 def get_center_box_tuple(proxy_w, proxy_h, target_w, target_h):
-    """Центрує рамку, гарантуючи межі."""
-    # Не даємо рамці бути більшою за саме зображення
+    """Центрує рамку, гарантуючи межі (мінімум 10px)."""
+    # Захист від дурня: якщо target більший за proxy
     target_w = min(target_w, proxy_w)
     target_h = min(target_h, proxy_h)
     
-    # Не даємо рамці бути меншою за 10px (щоб не зникла)
+    # Захист від смужок: мінімум 10 пікселів
     target_w = max(10, target_w)
     target_h = max(10, target_h)
     
@@ -44,31 +44,35 @@ def get_center_box_tuple(proxy_w, proxy_h, target_w, target_h):
     
     return (left, top, int(target_w), int(target_h))
 
-# --- MAIN ---
+# --- ОСНОВНА ФУНКЦІЯ ---
 
 @st.dialog("🛠 Editor", width="large")
 def open_editor_dialog(fpath: str, T: dict):
     file_id = os.path.basename(fpath)
     
-    # 1. INIT STATE
+    # === 1. ВИЗНАЧЕННЯ КЛЮЧІВ (KEYS) ===
+    # Визначаємо ключі заздалегідь, щоб використовувати їх і в UI, і в Callbacks
     k_rot = f"rot_{file_id}"
     k_box = f"box_{file_id}"      # Примусова рамка (tuple)
-    k_upd = f"upd_{file_id}"      # Лічильник оновлень
-    k_asp = f"asp_{file_id}"      # Ключ пропорцій
+    k_upd = f"upd_{file_id}"      # Лічильник оновлень (Hard Reset)
+    k_asp = f"asp_{file_id}"      # Селектор пропорцій
+    k_in_w = f"in_w_{file_id}"    # Інпут ширини
+    k_in_h = f"in_h_{file_id}"    # Інпут висоти
 
+    # === 2. ІНІЦІАЛІЗАЦІЯ СТАНУ ===
     if k_rot not in st.session_state: st.session_state[k_rot] = 0
     if k_box not in st.session_state: st.session_state[k_box] = None
     if k_upd not in st.session_state: st.session_state[k_upd] = 0
     if k_asp not in st.session_state: st.session_state[k_asp] = "Free / Вільний"
 
-    # 2. LOAD IMAGE
+    # === 3. ЗАВАНТАЖЕННЯ ===
     try:
         validate_image_file(fpath)
         img_orig = Image.open(fpath)
         img_orig = ImageOps.exif_transpose(img_orig)
         img_orig = img_orig.convert('RGB')
         
-        # Rotate
+        # Поворот
         if st.session_state[k_rot] != 0:
             img_orig = img_orig.rotate(-st.session_state[k_rot], expand=True)
             
@@ -83,9 +87,10 @@ def open_editor_dialog(fpath: str, T: dict):
 
     st.caption(get_file_info_str(fpath, img_orig))
 
-    # --- 3. LOGIC HANDLERS (CALLBACKS) ---
-    # Прості дії залишаємо на callbacks
-    
+    # === 4. ЛОГІКА (CALLBACKS) ===
+    # Ці функції виконуються ДО того, як Streamlit почне малювати віджети.
+    # Це вирішує проблему StreamlitAPIException.
+
     def on_rotate(delta):
         st.session_state[k_rot] += delta
         st.session_state[k_box] = None
@@ -98,12 +103,10 @@ def open_editor_dialog(fpath: str, T: dict):
         st.session_state[k_upd] += 1
 
     def on_max():
-        # Беремо поточний аспект
         asp_key = st.session_state[k_asp]
         asp_tuple = config.ASPECT_RATIOS.get(asp_key, None)
         
         if asp_tuple:
-            # Aspect Mode
             r = asp_tuple[0] / asp_tuple[1]
             bw = proxy_w
             bh = int(bw / r)
@@ -111,22 +114,43 @@ def open_editor_dialog(fpath: str, T: dict):
                 bh = proxy_h
                 bw = int(bh * r)
         else:
-            # Free Mode (Max Area)
             bw, bh = proxy_w - 20, proxy_h - 20
             
         st.session_state[k_box] = get_center_box_tuple(proxy_w, proxy_h, bw, bh)
         st.session_state[k_upd] += 1
 
-    # --- 4. LAYOUT ---
+    def on_apply_manual_size():
+        """
+        Викликається при натисканні 'Застосувати' у формі.
+        В цей момент значення в k_in_w та k_in_h ВЖЕ оновлені формою.
+        """
+        # 1. Читаємо введені дані
+        val_w = st.session_state[k_in_w]
+        val_h = st.session_state[k_in_h]
+        
+        # 2. Примусово перемикаємо на Free Mode (тут це безпечно, бо віджет ще не намальовано)
+        free_key = [k for k, v in config.ASPECT_RATIOS.items() if v is None][0]
+        st.session_state[k_asp] = free_key
+        
+        # 3. Переводимо в Proxy координати
+        pw = int(val_w / scale_factor)
+        ph = int(val_h / scale_factor)
+        
+        # 4. Встановлюємо нову рамку
+        st.session_state[k_box] = get_center_box_tuple(proxy_w, proxy_h, pw, ph)
+        st.session_state[k_upd] += 1
+
+    # === 5. ІНТЕРФЕЙС ===
     col_can, col_ui = st.columns([3, 1], gap="medium")
 
-    # === UI PANEL ===
+    # --- ПАНЕЛЬ ІНСТРУМЕНТІВ ---
     with col_ui:
         st.markdown("**1. Інструменти**")
         c1, c2 = st.columns(2)
         c1.button("↺ -90°", key=f"l{file_id}", on_click=on_rotate, args=(-90,), use_container_width=True)
         c2.button("↻ +90°", key=f"r{file_id}", on_click=on_rotate, args=(90,), use_container_width=True)
         
+        # Селектор використовує key=k_asp, який ми безпечно змінюємо в callbacks
         st.selectbox("Пропорції", list(config.ASPECT_RATIOS.keys()), key=k_asp, label_visibility="collapsed")
         
         b1, b2 = st.columns(2)
@@ -135,37 +159,22 @@ def open_editor_dialog(fpath: str, T: dict):
         
         st.divider()
         
-        # === FORM FOR MANUAL SIZE (CRITICAL FIX) ===
+        # === ФОРМА ДЛЯ ВВЕДЕННЯ РОЗМІРУ ===
+        # st.form гарантує цілісність даних
         st.markdown("**2. Точний розмір**")
         
-        # Форма гарантує, що дані відправляться пакетом
         with st.form(key=f"size_form_{file_id}", border=False):
             fc1, fc2 = st.columns(2)
-            # Встановлюємо value як default, але не прив'язуємо key до session_state напряму, щоб уникнути конфліктів
-            # Користувач вводить нові дані -> тисне кнопку -> ми їх читаємо
-            in_w = fc1.number_input("W", value=orig_w, min_value=10, max_value=orig_w, label_visibility="collapsed")
-            in_h = fc2.number_input("H", value=orig_h, min_value=10, max_value=orig_h, label_visibility="collapsed")
+            # Встановлюємо ключі, щоб callback міг їх прочитати
+            fc1.number_input("W", value=orig_w, min_value=10, max_value=orig_w, key=k_in_w, label_visibility="collapsed")
+            fc2.number_input("H", value=orig_h, min_value=10, max_value=orig_h, key=k_in_h, label_visibility="collapsed")
             
-            submit_size = st.form_submit_button("✓ Застосувати", use_container_width=True, type="primary")
-            
-            if submit_size:
-                # Цей код виконається при натисканні, маючи актуальні in_w та in_h
-                
-                # 1. Примусово Free Mode
-                st.session_state[k_asp] = "Free / Вільний"
-                
-                # 2. Розрахунок Proxy
-                pw = int(in_w / scale_factor)
-                ph = int(in_h / scale_factor)
-                
-                # 3. Оновлення рамки
-                st.session_state[k_box] = get_center_box_tuple(proxy_w, proxy_h, pw, ph)
-                st.session_state[k_upd] += 1
-                st.rerun()
+            # ВАЖЛИВО: on_click викликає функцію ДО перезавантаження скрипта
+            st.form_submit_button("✓ Застосувати", on_click=on_apply_manual_size, use_container_width=True, type="primary")
 
-    # === CANVAS PANEL ===
+    # --- ПОЛОТНО (CANVAS) ---
     with col_can:
-        # Унікальний ключ = Hard Reset віджета
+        # Унікальний ключ гарантує повне перестворення віджета при змінах
         cropper_id = f"crp_{file_id}_{st.session_state[k_upd]}_{st.session_state[k_asp]}"
         
         aspect_val = config.ASPECT_RATIOS.get(st.session_state[k_asp], None)
@@ -182,9 +191,8 @@ def open_editor_dialog(fpath: str, T: dict):
             key=cropper_id
         )
 
-    # === SAVE PANEL ===
+    # --- ПАНЕЛЬ ЗБЕРЕЖЕННЯ ---
     with col_ui:
-        # Info & Save Logic
         real_w, real_h, crop_box = 0, 0, None
         
         if rect:
@@ -211,9 +219,10 @@ def open_editor_dialog(fpath: str, T: dict):
                     final = img_orig.crop(crop_box)
                     final.save(fpath, quality=95, subsampling=0)
                     
-                    # Clean
-                    for k in [k_rot, k_box, k_upd, k_asp]:
+                    # Cleanup
+                    for k in [k_rot, k_box, k_upd, k_asp, k_in_w, k_in_h]:
                         if k in st.session_state: del st.session_state[k]
+                    
                     thumb = f"{fpath}.thumb.jpg"
                     if os.path.exists(thumb): os.remove(thumb)
                     
