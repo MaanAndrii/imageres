@@ -213,7 +213,7 @@ def open_editor_dialog(fpath: str, T: dict):
                 ):
                     st.session_state[f'rot_{file_id}'] -= 90
                     st.session_state[f'reset_{file_id}'] += 1
-                    st.session_state[f'def_coords_{file_id}'] = None
+                    # st.session_state[f'def_coords_{file_id}'] = None  <-- ЦЕ БІЛЬШЕ НЕ ПОТРІБНО
                     st.rerun()
             
             with c2:
@@ -224,7 +224,7 @@ def open_editor_dialog(fpath: str, T: dict):
                 ):
                     st.session_state[f'rot_{file_id}'] += 90
                     st.session_state[f'reset_{file_id}'] += 1
-                    st.session_state[f'def_coords_{file_id}'] = None
+                    # st.session_state[f'def_coords_{file_id}'] = None  <-- ЦЕ БІЛЬШЕ НЕ ПОТРІБНО
                     st.rerun()
             
             st.divider()
@@ -239,24 +239,19 @@ def open_editor_dialog(fpath: str, T: dict):
             )
             aspect_val = config.ASPECT_RATIOS[aspect_choice]
             
-            # MAX button
-            if st.button(
-                "MAX ⛶",
-                use_container_width=True,
-                key=f"max_{file_id}",
-                help="Maximize crop area"
-            ):
-                max_box = get_max_box(proxy_w, proxy_h, aspect_val)
-                st.session_state[f'def_coords_{file_id}'] = max_box
-                st.session_state[f'reset_{file_id}'] += 1
-                st.rerun()
+            # --- ВИДАЛЕНО КНОПКУ MAX ---
             
             st.divider()
         
         # === CANVAS ===
         with col_canvas:
             cropper_id = f"crp_{file_id}_{st.session_state[f'reset_{file_id}']}_{aspect_choice}"
-            def_coords = st.session_state.get(f'def_coords_{file_id}', None)
+            
+            # [ВИПРАВЛЕННЯ] Примусово розраховуємо MAX рамку для поточних умов
+            # Ми передаємо це значення як default_coords. 
+            # Кропер використає його ТІЛЬКИ при ініціалізації (коли змінюється cropper_id).
+            # При звичайному редагуванні (коли id той самий) він ігнорує це і зберігає ручні зміни користувача.
+            default_max_box = get_max_box(proxy_w, proxy_h, aspect_val)
             
             try:
                 rect = st_cropper(
@@ -265,7 +260,7 @@ def open_editor_dialog(fpath: str, T: dict):
                     box_color='#FF0000',
                     aspect_ratio=aspect_val,
                     should_resize_image=False,
-                    default_coords=def_coords,
+                    default_coords=default_max_box, # <-- ПЕРЕДАЄМО ЯВНО РОЗРАХОВАНУ РАМКУ
                     return_type='box',
                     key=cropper_id
                 )
