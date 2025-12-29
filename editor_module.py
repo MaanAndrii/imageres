@@ -121,12 +121,12 @@ def get_max_box(
         
         ratio_val = ratio_w / ratio_h
         
-        # ВИПРАВЛЕННЯ: Спочатку пробуємо по ширині (використати ВСЮ ширину)
+        # Try to fit by width
         try_w = img_w
         try_h = int(try_w / ratio_val)
         
         if try_h > img_h:
-            # Не влізло по висоті - вписуємо по висоті (використати ВСЮ висоту)
+            # Doesn't fit, try by height
             try_h = img_h
             try_w = int(try_h * ratio_val)
         
