@@ -8,7 +8,7 @@ import streamlit as st
 import os
 from typing import Optional, Tuple
 from PIL import Image, ImageOps
-from streamlit_cropper_fix import st_cropper
+from streamlit_cropper import st_cropper
 import config
 from logger import get_logger
 from validators import validate_image_file, validate_dimensions
