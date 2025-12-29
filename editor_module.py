@@ -229,24 +229,16 @@ def open_editor_dialog(fpath: str, T: dict):
             )
             aspect_val = config.ASPECT_RATIOS[aspect_choice]
             
-            # Кнопка MAX видалена, як ви просили
+            # Кнопку "MAX" видалено повністю
             
             st.divider()
         
         # === CANVAS ===
         with col_canvas:
+            # Генеруємо унікальний ID. При зміні aspect_choice або reset, 
+            # віджет перествориться і скине рамку в дефолтне положення.
             cropper_id = f"crp_{file_id}_{st.session_state[f'reset_{file_id}']}_{aspect_choice}"
             
-            # [ВИПРАВЛЕННЯ ЛОГІКИ]
-            # 1. Якщо пропорції вільні (None) -> ми вручну задаємо рамку на все фото,
-            #    бо бібліотека іноді малює маленьку рамку по центру.
-            # 2. Якщо пропорції фіксовані (16:9) -> передаємо None.
-            #    Бібліотека сама створить макс. рамку без помилок заокруглення.
-            if aspect_val is None:
-                rect_coords = get_max_box(proxy_w, proxy_h, None)
-            else:
-                rect_coords = None
-
             try:
                 rect = st_cropper(
                     img_proxy,
@@ -254,7 +246,7 @@ def open_editor_dialog(fpath: str, T: dict):
                     box_color='#FF0000',
                     aspect_ratio=aspect_val,
                     should_resize_image=False,
-                    default_coords=rect_coords, # Тут тепер "розумний" вибір
+                    default_coords=None,  # <--- ВІДДАЄМО КОНТРОЛЬ БІБЛІОТЕЦІ
                     return_type='box',
                     key=cropper_id
                 )
