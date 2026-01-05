@@ -1,0 +1,5 @@
+streamlit
+Pillow
+translitua
+pandas
+streamlit-cropper-fix
