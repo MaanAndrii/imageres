@@ -1,27 +1,26 @@
 """
 Watermarker Pro v7.0 - Configuration Module
-============================================
-Centralized configuration and constants
 """
-
 import os
 from pathlib import Path
 
 # === APPLICATION INFO ===
-APP_VERSION = "7.0"
+APP_VERSION = "7.0.1" # Оновлено версію
 APP_NAME = "Watermarker Pro"
 APP_AUTHOR = "Marynyuk Andriy"
-APP_LICENSE = "Proprietary"
-APP_REPO = "https://github.com/MaanAndrii"
 
 # === FILE SETTINGS ===
-MAX_FILE_SIZE = 100 * 1024 * 1024  # 100 MB
+MAX_FILE_SIZE = 100 * 1024 * 1024 
 MAX_FILENAME_LENGTH = 255
-SUPPORTED_INPUT_FORMATS = ['.jpg', '.jpeg', '.png', '.webp']
+# Додано .pdf до списку підтримуваних форматів
+SUPPORTED_INPUT_FORMATS = ['.jpg', '.jpeg', '.png', '.webp', '.pdf']
 SUPPORTED_OUTPUT_FORMATS = ['JPEG', 'WEBP', 'PNG']
 
+# === PDF SETTINGS ===
+PDF_CONVERSION_DPI = 200  # Якість конвертації PDF в зображення
+
 # === IMAGE PROCESSING ===
-MAX_IMAGE_DIMENSION = 10000  # Maximum width or height
+MAX_IMAGE_DIMENSION = 10000 
 MIN_IMAGE_DIMENSION = 10
 THUMBNAIL_SIZE = (300, 300)
 PROXY_IMAGE_WIDTH = 700
@@ -39,7 +38,6 @@ ASPECT_RATIOS = {
     "1:1 (Square)": (1, 1),
     "3:2": (3, 2),
     "4:3": (4, 3),
-    "5:4": (5, 4),
     "16:9": (16, 9),
     "9:16": (9, 16)
 }
@@ -64,56 +62,22 @@ DEFAULT_SETTINGS = {
 }
 
 # === POSITION PRESETS ===
-TILED_SETTINGS = {
-    'wm_scale': 15,
-    'wm_opacity': 0.3,
-    'wm_gap': 30,
-    'wm_angle': 45
-}
-
-CORNER_SETTINGS = {
-    'wm_scale': 15,
-    'wm_opacity': 1.0,
-    'wm_margin': 15,
-    'wm_angle': 0
-}
+TILED_SETTINGS = {'wm_scale': 15, 'wm_opacity': 0.3, 'wm_gap': 30, 'wm_angle': 45}
+CORNER_SETTINGS = {'wm_scale': 15, 'wm_opacity': 1.0, 'wm_margin': 15, 'wm_angle': 0}
 
 # === PERFORMANCE ===
 MIN_THREADS = 1
 MAX_THREADS = 8
 DEFAULT_THREADS = 2
-CACHE_TTL = 300  # seconds
 
 # === PATHS ===
-def get_project_root() -> Path:
-    """Get project root directory"""
-    return Path(__file__).parent
-
-def get_assets_dir() -> Path:
-    """Get assets directory"""
-    return get_project_root() / 'assets'
-
-def get_fonts_dir() -> Path:
-    """Get fonts directory"""
-    return get_assets_dir() / 'fonts'
+def get_project_root() -> Path: return Path(__file__).parent
+def get_assets_dir() -> Path: return get_project_root() / 'assets'
+def get_fonts_dir() -> Path: return get_assets_dir() / 'fonts'
 
 # === LOGGING ===
 LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 LOG_LEVEL = 'INFO'
 LOG_FILE = 'watermarker.log'
 
-# === QUALITY PRESETS ===
-QUALITY_PRESETS = {
-    'Low': 50,
-    'Medium': 70,
-    'High': 85,
-    'Maximum': 95
-}
-
-# === RESIZE PRESETS ===
-RESIZE_PRESETS = {
-    'HD': 1280,
-    'FHD': 1920,
-    '2K': 2560,
-    '4K': 3840
-}
+RESIZE_PRESETS = {'HD': 1280, 'FHD': 1920, '4K': 3840}
