@@ -1,7 +1,7 @@
 """
 Watermarker Pro v7.0.1 - Main Application
 ========================================
-Professional batch photo and PDF watermarking
+Batch watermarking with interactive error notifications
 """
 
 import streamlit as st
@@ -76,7 +76,7 @@ with st.sidebar:
         st.slider(T['lbl_angle'], -180, 180, key='wm_angle_key')
 
     with st.expander(T['sec_perf']):
-        threads = st.slider(T['lbl_threads'], 1, 8, 2)
+        threads = st.slider(T['lbl_threads'], 1, 8, config.DEFAULT_THREADS)
     
     if st.button(T['btn_defaults'], on_click=utils.reset_settings, use_container_width=True): st.rerun()
     
@@ -98,9 +98,18 @@ with c_l:
     with st.expander(T['expander_add_files'], expanded=not len(st.session_state['file_cache'])):
         uploaded = st.file_uploader(T['uploader_label'], type=config.SUPPORTED_INPUT_FORMATS, accept_multiple_files=True, key=f"up_{st.session_state['uploader_key']}")
         if uploaded:
-            with st.spinner("Processing..."):
+            with st.spinner("🔄 Processing files..."):
                 for f in uploaded:
-                    for path, name in utils.process_uploaded_file(f): st.session_state['file_cache'][name] = path
+                    try:
+                        # Спроба обробити файл
+                        new_items = utils.process_uploaded_file(f)
+                        for path, name in new_items:
+                            st.session_state['file_cache'][name] = path
+                    except Exception as e:
+                        # ПОВІДОМЛЕННЯ ПРО ПОМИЛКУ В UI
+                        st.error(f"❌ Error processing '{f.name}': {str(e)}")
+                        logger.error(f"UI Error: {str(e)}")
+            
             st.session_state['uploader_key'] += 1; st.rerun()
     
     f_map = st.session_state['file_cache']
@@ -111,7 +120,9 @@ with c_l:
         sel = list(st.session_state['selected_files'])
         if ca3.button(f"{T['grid_delete']} ({len(sel)})", type="primary", use_container_width=True, disabled=not sel):
             for f in sel:
-                if f in f_map: os.remove(f_map[f]); del f_map[f]
+                if f in f_map: 
+                    if os.path.exists(f_map[f]): os.remove(f_map[f])
+                    del f_map[f]
             st.session_state['selected_files'].clear(); st.rerun()
         
         cols = st.columns(4)
@@ -129,17 +140,21 @@ with c_l:
             prog = st.progress(0); st_txt = st.empty(); results, z_buf = [], io.BytesIO()
             wm_obj = utils.prepare_watermark_object(wm_file, st.session_state.get('font_name_key'))
             res_cfg = utils.get_resize_config()
-            with concurrent.futures.ThreadPoolExecutor(max_workers=threads) as exc:
-                futures = {exc.submit(engine.process_image, f_map[name], engine.generate_filename(f_map[name], st.session_state['naming_mode_key'], st.session_state['naming_prefix_key'], st.session_state['out_fmt_key'].lower(), i+1), wm_obj, res_cfg, st.session_state['out_fmt_key'], st.session_state['out_quality_key']): name for i, name in enumerate(sel)}
-                with zipfile.ZipFile(z_buf, "w") as zf:
-                    for i, fut in enumerate(concurrent.futures.as_completed(futures)):
-                        rb, stats = fut.result(); zf.writestr(stats['filename'], rb); results.append((stats['filename'], rb))
-                        prog.progress((i+1)/len(sel)); st_txt.text(f"Done: {stats['filename']}")
-            utils.safe_state_update('results', {'zip': z_buf.getvalue(), 'files': results})
-            st.rerun()
+            try:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=threads) as exc:
+                    futures = {exc.submit(engine.process_image, f_map[name], engine.generate_filename(f_map[name], st.session_state['naming_mode_key'], st.session_state['naming_prefix_key'], st.session_state['out_fmt_key'].lower(), i+1), wm_obj, res_cfg, st.session_state['out_fmt_key'], st.session_state['out_quality_key']): name for i, name in enumerate(sel)}
+                    with zipfile.ZipFile(z_buf, "w") as zf:
+                        for i, fut in enumerate(concurrent.futures.as_completed(futures)):
+                            rb, stats = fut.result(); zf.writestr(stats['filename'], rb); results.append((stats['filename'], rb))
+                            prog.progress((i+1)/len(sel)); st_txt.text(f"Done: {stats['filename']}")
+                utils.safe_state_update('results', {'zip': z_buf.getvalue(), 'files': results})
+                st.rerun()
+            except Exception as e:
+                st.error(f"❌ Processing failed: {str(e)}")
 
     if st.session_state.get('results'):
         res = st.session_state['results']
+        st.success(f"✅ Finished! {len(res['files'])} files processed.")
         st.download_button(T['btn_dl_zip'], res['zip'], "photos.zip", type="primary", use_container_width=True)
 
 with c_r:
@@ -153,9 +168,12 @@ with c_r:
             editor.open_editor_dialog(fpath, T)
         if st.session_state.get('close_editor'): st.session_state['editing_file'] = None; st.session_state['close_editor'] = False
         
-        wm_obj = utils.prepare_watermark_object(wm_file, st.session_state.get('font_name_key'))
-        p_bytes, stats = engine.process_image(fpath, "preview.jpg", wm_obj, utils.get_resize_config(), "JPEG", 80)
-        st.image(p_bytes, use_container_width=True)
-        m1, m2 = st.columns(2)
-        m1.metric(T['stat_res'], stats['new_res']); m2.metric(T['stat_size'], f"{stats['new_size']/1024:.1f} KB")
+        try:
+            wm_obj = utils.prepare_watermark_object(wm_file, st.session_state.get('font_name_key'))
+            p_bytes, stats = engine.process_image(fpath, "preview.jpg", wm_obj, utils.get_resize_config(), "JPEG", 80)
+            st.image(p_bytes, use_container_width=True)
+            m1, m2 = st.columns(2)
+            m1.metric(T['stat_res'], stats['new_res']); m2.metric(T['stat_size'], f"{stats['new_size']/1024:.1f} KB")
+        except Exception as e:
+            st.warning(f"Preview unavailable: {str(e)}")
     else: st.markdown(f'<div class="preview-placeholder">{T["prev_placeholder"]}</div>', unsafe_allow_html=True)
