@@ -1,7 +1,7 @@
 """
 Watermarker Pro v7.0.1 - Utils Module
 ====================================
-File handling with PDF splitting support
+File handling with PDF support and transparent error propagation
 """
 
 import streamlit as st
@@ -45,15 +45,22 @@ def init_session_state():
         if kn not in st.session_state: st.session_state[kn] = value
 
 def process_uploaded_file(uploaded_file) -> List[Tuple[str, str]]:
+    """
+    Обробляє завантажений файл. 
+    У разі помилки (наприклад, відсутність Poppler) виключення ПЕРЕДАЄТЬСЯ далі.
+    """
+    temp_dir = st.session_state['temp_dir']
+    safe_name = sanitize_filename(uploaded_file.name)
+    ext = os.path.splitext(safe_name)[1].lower()
+    
+    raw_path = os.path.join(temp_dir, f"raw_{datetime.now().strftime('%H%M%S')}_{safe_name}")
+    with open(raw_path, "wb") as f:
+        f.write(uploaded_file.getbuffer())
+    
+    output_items = []
     try:
-        temp_dir = st.session_state['temp_dir']
-        safe_name = sanitize_filename(uploaded_file.name)
-        ext = os.path.splitext(safe_name)[1].lower()
-        raw_path = os.path.join(temp_dir, f"raw_{datetime.now().strftime('%H%M%S')}_{safe_name}")
-        with open(raw_path, "wb") as f: f.write(uploaded_file.getbuffer())
-        
-        output_items = []
         if ext == '.pdf':
+            # Це викличе виключення, якщо Poppler не встановлений
             pages = engine.convert_pdf_to_images(raw_path)
             base = os.path.splitext(safe_name)[0]
             for i, page_img in enumerate(pages):
@@ -64,13 +71,17 @@ def process_uploaded_file(uploaded_file) -> List[Tuple[str, str]]:
             os.remove(raw_path)
         else:
             final_path = os.path.join(temp_dir, safe_name)
-            if os.path.exists(final_path): final_path = os.path.join(temp_dir, f"{datetime.now().strftime('%H%M%S')}_{safe_name}")
+            if os.path.exists(final_path):
+                final_path = os.path.join(temp_dir, f"{datetime.now().strftime('%H%M%S')}_{safe_name}")
             shutil.move(raw_path, final_path)
             output_items.append((final_path, os.path.basename(final_path)))
+            
         return output_items
     except Exception as e:
-        logger.error(f"Upload error: {e}")
-        return []
+        # При помилці видаляємо сирий файл та прокидаємо помилку вгору
+        if os.path.exists(raw_path):
+            os.remove(raw_path)
+        raise e
 
 def cleanup_temp_directory():
     try:
