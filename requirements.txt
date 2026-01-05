@@ -1,6 +1,0 @@
-streamlit
-Pillow
-translitua
-pandas
-streamlit-cropper-fix
-pdf2image
