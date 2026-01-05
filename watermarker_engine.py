@@ -508,17 +508,38 @@ def _apply_tiled_watermark(
     step_x = max(10, wm_w + gap)
     step_y = max(10, wm_h + gap)
     
-    rows_needed = (new_h // step_y) + 3
-    cols_needed = (new_w // step_x) + 3
+    # Розрахунок базової кількості рядків та колонок, необхідних для покриття зображення
+    base_rows = (new_h // step_y) + 2
+    base_cols = (new_w // step_x) + 2
     
-    for row in range(-1, rows_needed):
-        for col in range(-1, cols_needed):
+    # Значно збільшуємо буфер ітерацій в обидва боки (від'ємний і додатний).
+    # Це необхідно для компенсації діагонального зсуву `(row * step_x // 2)`,
+    # який може призвести до пропусків у кутах при стандартному діапазоні.
+    row_buffer = base_rows
+    col_buffer = base_cols
+    
+    start_row = -row_buffer
+    end_row = base_rows + row_buffer
+    
+    start_col = -col_buffer
+    end_col = base_cols + col_buffer
+    
+    logger.debug(f"Tiling approach: rows[{start_row}:{end_row}], cols[{start_col}:{end_col}], step_x={step_x}, step_y={step_y}")
+    
+    count_pasted = 0
+    for row in range(start_row, end_row):
+        for col in range(start_col, end_col):
+            # Розрахунок позиції з діагональним зсувом
             x = col * step_x + (row * step_x // 2)
             y = row * step_y
             
+            # Перевірка, чи перетинається водяний знак з видимою областю зображення
             if (x + wm_w > 0 and x < new_w and
                 y + wm_h > 0 and y < new_h):
                 overlay.paste(wm, (x, y), wm)
+                count_pasted += 1
+                
+    logger.debug(f"Tiled watermark finished: {count_pasted} tiles pasted")
     
     return Image.alpha_composite(img, overlay)
 
