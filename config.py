@@ -17,7 +17,7 @@ APP_REPO = "https://github.com/MaanAndrii"
 # === FILE SETTINGS ===
 MAX_FILE_SIZE = 100 * 1024 * 1024  # 100 MB
 MAX_FILENAME_LENGTH = 255
-SUPPORTED_INPUT_FORMATS = ['.jpg', '.jpeg', '.png', '.webp']
+SUPPORTED_INPUT_FORMATS = ['.jpg', '.jpeg', '.png', '.webp', '.heic', '.heif']
 SUPPORTED_OUTPUT_FORMATS = ['JPEG', 'WEBP', 'PNG']
 
 # === IMAGE PROCESSING ===
