@@ -4,7 +4,7 @@ Watermarker Pro v8.0 - Engine Module
 Core image processing with error handling and optimization.
 
 Зміни v8.0:
-- SVG як вотермарка (через cairosvg → PNG у пам'яті)
+- SVG як вотермарка (через resvg-py → PNG у пам'яті, без системних залежностей)
 - LRU-кеш шрифтів з обмеженням розміру (cachetools)
 - Токен скасування (CancellationToken) для batch-обробки
 - HEIC/HEIF через pillow-heif
@@ -85,7 +85,7 @@ def is_heic_available() -> bool:
 
 
 def is_svg_available() -> bool:
-    """Повертає True якщо cairosvg встановлено"""
+    """Повертає True якщо resvg-py встановлено"""
     return _svg_available
 
 
