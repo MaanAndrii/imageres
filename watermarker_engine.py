@@ -41,16 +41,16 @@ except ImportError:
     logger.warning("pillow-heif not installed — HEIC/HEIF files will not be supported")
 
 # === SVG SUPPORT ===
-# svglib + reportlab — чисто Python, не потребує системних бібліотек (libcairo тощо).
-# Сумісно зі Streamlit Cloud, Railway, Heroku та іншими managed середовищами.
+# resvg-py — Rust-бібліотека з prebuilt wheels для всіх платформ.
+# Не потребує libcairo, pkg-config або будь-яких системних залежностей.
+# Сумісна зі Streamlit Cloud, Railway, Heroku тощо.
 _svg_available = False
 try:
-    from svglib.svglib import svg2rlg
-    from reportlab.graphics import renderPM
+    from resvg_py import svg_to_bytes as _resvg_svg_to_bytes
     _svg_available = True
-    logger.info("SVG watermark support enabled via svglib+reportlab")
+    logger.info("SVG watermark support enabled via resvg-py")
 except ImportError:
-    logger.warning("svglib/reportlab not installed — SVG watermarks will not be supported")
+    logger.warning("resvg-py not installed — SVG watermarks will not be supported")
 
 # === FONT CACHE (LRU, обмежений розмір) ===
 _font_cache: LRUCache = LRUCache(maxsize=config.FONT_CACHE_MAX_SIZE)
@@ -228,71 +228,45 @@ def rotate_image_file(file_path: str, angle: int) -> bool:
 
 def load_svg_watermark(svg_bytes: bytes, target_width: int = 500) -> Optional[Image.Image]:
     """
-    Конвертує SVG у RGBA PIL Image через svglib + reportlab.
+    Конвертує SVG у RGBA PIL Image через resvg-py.
 
-    svglib/reportlab — чисто Python, без системних залежностей (на відміну від cairosvg).
-    Сумісно зі Streamlit Cloud.
-
-    Pipeline:
-        SVG bytes → temp file → svg2rlg() → Drawing → renderPM (PNG bytes) → PIL RGBA
+    resvg-py — Rust-бібліотека з prebuilt wheels. Не потребує libcairo,
+    pkg-config або будь-яких системних залежностей. Повністю сумісна зі
+    Streamlit Cloud.
 
     Args:
-        svg_bytes:    Вміст SVG файлу
-        target_width: Бажана ширина растеризації (px). Масштабується пропорційно.
+        svg_bytes:    Вміст SVG файлу (bytes або str)
+        target_width: Ширина растеризації (px). resvg масштабує пропорційно.
 
     Returns:
         PIL Image у RGBA
 
     Raises:
-        ValueError: якщо svglib не встановлено або SVG не вдалося розпарсити
+        ValueError: якщо resvg-py не встановлено або SVG не вдалося растеризувати
     """
     if not _svg_available:
         raise ValueError(
-            "svglib/reportlab не встановлено. Встановіть: pip install svglib reportlab"
+            "resvg-py не встановлено. Встановіть: pip install resvg-py"
         )
     if not svg_bytes:
         raise ValueError("SVG bytes are empty")
 
-    import tempfile
-    import os
-
-    tmp_path = None
     try:
-        # svglib.svg2rlg() приймає шлях до файлу, не bytes
-        with tempfile.NamedTemporaryFile(suffix='.svg', delete=False) as f:
-            f.write(svg_bytes)
-            tmp_path = f.name
+        svg_string = svg_bytes.decode('utf-8') if isinstance(svg_bytes, bytes) else svg_bytes
 
-        drawing = svg2rlg(tmp_path)
-        if drawing is None:
-            raise ValueError("svg2rlg returned None — SVG може бути пошкодженим або непідтримуваним")
+        png_bytes = _resvg_svg_to_bytes(
+            svg_string=svg_string,
+            width=target_width         # resvg масштабує висоту пропорційно автоматично
+        )
 
-        # Масштабуємо Drawing до target_width зберігаючи пропорції
-        if drawing.width > 0:
-            scale = target_width / drawing.width
-            drawing.width  = target_width
-            drawing.height = drawing.height * scale
-            drawing.transform = (scale, 0, 0, scale, 0, 0)
-
-        # Рендеримо у PNG bytes у пам'яті
-        buf = io.BytesIO()
-        renderPM.drawToFile(drawing, buf, fmt='PNG')
-        buf.seek(0)
-
-        img = Image.open(buf).convert("RGBA")
+        img = Image.open(io.BytesIO(png_bytes)).convert("RGBA")
         validate_dimensions(img.width, img.height)
         logger.debug(f"SVG watermark rasterized: {img.width}x{img.height}")
         return img
 
-    except (ValueError, Exception) as e:
+    except Exception as e:
         logger.error(f"SVG watermark load failed: {e}")
         raise ValueError(f"Failed to load SVG watermark: {e}")
-    finally:
-        if tmp_path and os.path.exists(tmp_path):
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
 
 
 # === PNG WATERMARK ===
