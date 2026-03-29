@@ -35,6 +35,8 @@ def init_session_state():
         'uploader_key': 0,
         'lang_code': 'ua',
         'editing_file': None,
+        'editor_open':  False,   # True тільки після натискання кнопки — запобігає
+                                 # самовільному відкриттю при кожному rerun
         'close_editor': False,
         'results': None,
         'cancel_token': None,       # CancellationToken | None
